@@ -1,6 +1,11 @@
 
 import streamlit as st
+import pandas as pd
 from supabase import create_client
+
+# ==========================================
+# 1. PAGE SETTINGS
+# ==========================================
 
 st.set_page_config(
     page_title="AI Shift Planner",
@@ -8,129 +13,113 @@ st.set_page_config(
     layout="wide"
 )
 
-# Připojení k databázi
-@st.cache_resource
-def connect_supabase():
-    return create_client(
-        st.secrets["SUPABASE_URL"].strip(),
-        st.secrets["SUPABASE_KEY"].strip()
-    )
-
-@st.cache_data(ttl=30)
-def load_data(table, columns="*"):
-    db = connect_supabase()
-    response = (
-        db.table(table)
-        .select(columns)
-        .execute()
-    )
-    return response.data or []
-
-# Hlavička aplikace
 st.title("📅 AI Shift Planner")
 st.subheader("Manager Dashboard")
-st.caption("Systém pro správu a plánování pracovních směn.")
+
+# ==========================================
+# 2. SUPABASE CONNECTION
+# ==========================================
+
+@st.cache_resource
+def init_supabase():
+    url = st.secrets["SUPABASE_URL"]
+    secret_key = st.secrets["SUPABASE_SECRET_KEY"]
+
+    return create_client(url, secret_key)
+
+
+try:
+    supabase = init_supabase()
+    st.success("Supabase connection successful!")
+
+except Exception as e:
+    st.error("Could not connect to Supabase.")
+    st.exception(e)
+    st.stop()
+
+
+# ==========================================
+# 3. DATABASE FUNCTIONS
+# ==========================================
+
+def load_table(table_name):
+    response = (
+        supabase
+        .table(table_name)
+        .select("*")
+        .execute()
+    )
+
+    return pd.DataFrame(response.data)
+
+
+# ==========================================
+# 4. LOAD DATABASE TABLES
+# ==========================================
+
+try:
+    employees = load_table("employees")
+    branches = load_table("branches")
+    shift_requirements = load_table("shift_requirements")
+    company_rules = load_table("company_rules")
+
+except Exception as e:
+    st.error("Could not load database tables.")
+    st.exception(e)
+    st.stop()
+
+
+# ==========================================
+# 5. DASHBOARD SUMMARY
+# ==========================================
+
+st.divider()
+st.header("Database Overview")
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Employees", len(employees))
+col2.metric("Branches", len(branches))
+col3.metric("Shift Requirements", len(shift_requirements))
+col4.metric("Company Rules", len(company_rules))
+
+
+# ==========================================
+# 6. DATABASE TABLES
+# ==========================================
 
 st.divider()
 
-try:
-    employees = load_data(
-        "employees",
-        "employee_id, contract_type, work_days_per_week, "
-        "days_off_per_week, employment_status"
-    )
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Employees",
+    "Branches",
+    "Shift Requirements",
+    "Company Rules"
+])
 
-    branches = load_data(
-        "branches",
-        "branch_id, branch_name, shift_type, is_active"
-    )
+with tab1:
+    st.subheader("Employees")
+    st.dataframe(employees, use_container_width=True)
 
-    shifts = load_data(
-        "shift_requirements",
-        "branch_id, shift_type, start_time, end_time, "
-        "required_employees, break_minutes, is_active"
-    )
+with tab2:
+    st.subheader("Branches")
+    st.dataframe(branches, use_container_width=True)
 
-    rules = load_data(
-        "company_rules",
-        "rule_key, rule_category, rule_value, "
-        "rule_description, is_active"
-    )
+with tab3:
+    st.subheader("Shift Requirements")
+    st.dataframe(shift_requirements, use_container_width=True)
 
-    # Souhrnné ukazatele
-    st.header("Přehled společnosti")
+with tab4:
+    st.subheader("Company Rules")
+    st.dataframe(company_rules, use_container_width=True)
 
-    col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("Zaměstnanci", len(employees))
-    col2.metric("Pobočky", len(branches))
-    col3.metric("Typy směn", len(shifts))
-    col4.metric("Pravidla", len(rules))
+# ==========================================
+# 7. CONNECTION STATUS
+# ==========================================
 
-    st.divider()
+st.divider()
+st.caption("AI Shift Planner | Database connection active")
 
-    # Jednotlivé sekce
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Zaměstnanci",
-        "Pobočky",
-        "Požadavky na směny",
-        "Pravidla společnosti"
-    ])
-
-    with tab1:
-        st.header("Seznam zaměstnanců")
-
-        if employees:
-            st.dataframe(
-                employees,
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Zatím nejsou k dispozici žádní zaměstnanci.")
-
-    with tab2:
-        st.header("Seznam poboček")
-
-        if branches:
-            st.dataframe(
-                branches,
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Zatím nejsou k dispozici žádné pobočky.")
-
-    with tab3:
-        st.header("Požadavky na směny")
-
-        if shifts:
-            st.dataframe(
-                shifts,
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Zatím nejsou nastaveny požadavky na směny.")
-
-    with tab4:
-        st.header("Pravidla společnosti")
-
-        if rules:
-            st.dataframe(
-                rules,
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("Zatím nejsou nastavena pravidla.")
-
-    st.divider()
-    st.caption("AI Shift Planner | Testovací verze")
-
-except Exception as e:
-    st.error("Nepodařilo se načíst data z databáze.")
-    with st.expander("Technické podrobnosti"):
-        st.code(str(e))
 
 
