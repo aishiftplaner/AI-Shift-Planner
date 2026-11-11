@@ -1,5 +1,6 @@
 
 import streamlit as st
+from supabase import create_client
 
 st.set_page_config(
     page_title="AI Shift Planner",
@@ -8,48 +9,58 @@ st.set_page_config(
 )
 
 st.title("📅 AI Shift Planner")
-
-st.subheader("AI-powered employee shift scheduling system")
+st.subheader("Inteligentní plánování směn")
 
 st.write(
-    """
-    Welcome to AI Shift Planner!
-
-    The system helps managers prepare weekly employee schedules,
-    identify scheduling conflicts and make informed decisions.
-    """
+    "Systém pro analýzu dostupnosti zaměstnanců "
+    "a přípravu týdenního rozvrhu směn."
 )
 
 st.divider()
 
-st.header("AI Agent")
+st.header("Kontrola připojení k databázi")
+
+try:
+    supabase = create_client(
+        st.secrets["SUPABASE_URL"].strip(),
+        st.secrets["SUPABASE_KEY"].strip()
+    )
+
+    response = (
+        supabase
+        .table("employees")
+        .select("employee_id")
+        .execute()
+    )
+
+    employees = response.data or []
+
+    st.success("Připojení k databázi Supabase je úspěšné!")
+
+    st.metric(
+        label="Počet zaměstnanců v databázi",
+        value=len(employees)
+    )
+
+except Exception as e:
+    st.error("Připojení k databázi se nezdařilo.")
+    with st.expander("Technické podrobnosti"):
+        st.code(str(e))
+
+st.divider()
+
+st.header("Hlavní funkce systému")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("🔍 Conflict Analysis")
-    st.write(
-        "Identifies missing information, contradictions "
-        "and potential scheduling conflicts."
-    )
+    st.subheader("1. Conflict Analysis")
+    st.write("Analýza konfliktů a chyb ve vstupních údajích.")
 
 with col2:
-    st.subheader("📊 Planning Assistant")
-    st.write(
-        "Prepares the scheduling task and coordinates "
-        "the scheduling algorithm."
-    )
+    st.subheader("2. Planning Assistant")
+    st.write("Příprava návrhu týdenního rozvrhu směn.")
 
 with col3:
-    st.subheader("💡 Decision Support")
-    st.write(
-        "Explains scheduling problems and suggests "
-        "alternative solutions to the manager."
-    )
-
-st.divider()
-
-st.info(
-    "Initial application version. Scheduling, database "
-    "and AI integration will be added in the next stages."
-)
+    st.subheader("3. Decision Support")
+    st.write("Vysvětlení problémů a návrhy alternativních řešení.")
