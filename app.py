@@ -17,8 +17,19 @@ st.write(
 )
 
 st.divider()
+st.header("Kontrola databáze Supabase")
 
-st.header("Kontrola připojení k databázi")
+tables = [
+    "employees",
+    "branches",
+    "shift_requirements",
+    "weekly_preferences",
+    "company_rules",
+    "schedule_runs",
+    "validation_issues",
+    "schedule_assignments",
+    "manager_approvals"
+]
 
 try:
     supabase = create_client(
@@ -26,29 +37,45 @@ try:
         st.secrets["SUPABASE_KEY"].strip()
     )
 
-    response = (
-        supabase
-        .table("employees")
-        .select("employee_id")
-        .execute()
-    )
+    results = []
+    all_successful = True
 
-    employees = response.data or []
+    for table in tables:
+        try:
+            response = (
+                supabase
+                .table(table)
+                .select("*")
+                .limit(1000)
+                .execute()
+            )
 
-    st.success("Připojení k databázi Supabase je úspěšné!")
+            results.append({
+                "Tabulka": table,
+                "Status": "OK",
+                "Počet záznamů": len(response.data or [])
+            })
 
-    st.metric(
-        label="Počet zaměstnanců v databázi",
-        value=len(employees)
-    )
+        except Exception as e:
+            all_successful = False
+            results.append({
+                "Tabulka": table,
+                "Status": "CHYBA",
+                "Počet záznamů": str(e)
+            })
+
+    if all_successful:
+        st.success("Všech 9 tabulek je dostupných!")
+    else:
+        st.warning("Některé tabulky nejsou dostupné.")
+
+    st.dataframe(results, use_container_width=True)
 
 except Exception as e:
     st.error("Připojení k databázi se nezdařilo.")
-    with st.expander("Technické podrobnosti"):
-        st.code(str(e))
+    st.code(str(e))
 
 st.divider()
-
 st.header("Hlavní funkce systému")
 
 col1, col2, col3 = st.columns(3)
@@ -64,3 +91,4 @@ with col2:
 with col3:
     st.subheader("3. Decision Support")
     st.write("Vysvětlení problémů a návrhy alternativních řešení.")
+
