@@ -98,7 +98,7 @@ def save_validation_issues(issues, selected_week):
             "recommended_action": issue.get(
                 "recommended_action"
             ),
-            "resolution_status": "open"
+            "resolution_status": "OPEN"
         }
 
         records.append(record)
@@ -973,13 +973,6 @@ with tab6:
                 "No validation issues found."
             )
 
-    else:
-
-        st.info(
-            "Select a week and click Run Validation "
-            "to check the submissions."
-        )
-
 
 # ==========================================
 # 14. FOOTER
@@ -990,3 +983,4 @@ st.divider()
 st.caption(
     "AI Shift Planner | Manager Dashboard"
 )
+ 
