@@ -85,7 +85,6 @@ def save_validation_issues(issues, selected_week):
         record = {
             "run_id": None,
             "employee_id": issue.get("employee_id"),
-            "branch": None,
             "work_date": None,
             "issue_type": issue["issue_type"],
             "severity": issue["severity"],
@@ -137,8 +136,6 @@ def validate_week_data(active_employees, week_preferences):
         "Unknown"
     ]
 
-    # Prepare employee submissions
-
     submissions = {}
 
     if not week_preferences.empty:
@@ -147,8 +144,6 @@ def validate_week_data(active_employees, week_preferences):
 
             submissions[row["employee_id"]] = row
 
-    # Check every active employee
-
     for _, employee in active_employees.iterrows():
 
         employee_id = employee["employee_id"]
@@ -156,9 +151,7 @@ def validate_week_data(active_employees, week_preferences):
         work_days = int(employee["work_days_per_week"])
         days_off = int(employee["days_off_per_week"])
 
-        # --------------------------------------
         # Check employee contract
-        # --------------------------------------
 
         if work_days + days_off != 7:
 
@@ -174,9 +167,7 @@ def validate_week_data(active_employees, week_preferences):
                 )
             })
 
-        # --------------------------------------
         # Check submission existence
-        # --------------------------------------
 
         if employee_id not in submissions:
 
@@ -196,9 +187,7 @@ def validate_week_data(active_employees, week_preferences):
 
         submission = submissions[employee_id]
 
-        # --------------------------------------
         # Check submission status
-        # --------------------------------------
 
         if submission.get("submission_status") != "Received":
 
@@ -216,9 +205,7 @@ def validate_week_data(active_employees, week_preferences):
 
             continue
 
-        # --------------------------------------
         # Check required days off
-        # --------------------------------------
 
         selected_days = submission.get("required_days_off")
 
@@ -238,8 +225,6 @@ def validate_week_data(active_employees, week_preferences):
 
         else:
 
-            # Check number of days off
-
             if len(selected_days) != days_off:
 
                 issues.append({
@@ -254,8 +239,6 @@ def validate_week_data(active_employees, week_preferences):
                         "Ask the employee to select the correct number of days."
                     )
                 })
-
-            # Check duplicate days
 
             if len(selected_days) != len(
                 set(map(str, selected_days))
@@ -272,8 +255,6 @@ def validate_week_data(active_employees, week_preferences):
                         "Correct the selected days off."
                     )
                 })
-
-            # Check valid weekday names
 
             invalid_days = [
                 day for day in selected_days
@@ -294,9 +275,7 @@ def validate_week_data(active_employees, week_preferences):
                     )
                 })
 
-        # --------------------------------------
         # Check preferred shift
-        # --------------------------------------
 
         preferred_shift = submission.get("preferred_shift")
 
@@ -314,9 +293,7 @@ def validate_week_data(active_employees, week_preferences):
                 )
             })
 
-        # --------------------------------------
         # Check Long Shift consent
-        # --------------------------------------
 
         consent = submission.get("long_shift_consent")
 
@@ -865,8 +842,6 @@ with tab6:
             "issues": validation_issues
         }
 
-        # Save validation results to Supabase
-
         try:
 
             saved_count = save_validation_issues(
@@ -941,8 +916,6 @@ with tab6:
             st.success(
                 "READY — All employee submissions passed validation."
             )
-
-        # Show database save status
 
         save_status = st.session_state.get(
             "validation_save_status"
