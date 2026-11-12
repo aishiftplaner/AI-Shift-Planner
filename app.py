@@ -25,7 +25,6 @@ st.set_page_config(
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
     secret_key = st.secrets["SUPABASE_SECRET_KEY"]
-
     return create_client(url, secret_key)
 
 
@@ -48,27 +47,32 @@ def load_table(table_name):
         .select("*")
         .execute()
     )
-
     return pd.DataFrame(response.data)
 
 
+def get_monday():
+    today = date.today()
+    return today - timedelta(days=today.weekday())
+
+
 # ==========================================
-# 4. EMPLOYEE AVAILABILITY FORM
+# 4. EMPLOYEE FORM
 # ==========================================
 
 def employee_form():
 
     st.title("📅 Employee Availability Form")
+
     st.write(
         "Please submit your availability "
-        "and shift preferences for the upcoming week."
+        "for the upcoming working week."
     )
 
     try:
         employees = load_table("employees")
 
         if employees.empty:
-            st.error("No employees found in the database.")
+            st.warning("No employees found.")
             return
 
         active_employees = employees[
@@ -79,11 +83,9 @@ def employee_form():
             "employee_id"
         )
 
-        employee_ids = active_employees["employee_id"].tolist()
-
         employee_id = st.selectbox(
             "Your Employee ID",
-            employee_ids
+            active_employees["employee_id"].tolist()
         )
 
         employee = active_employees[
@@ -100,12 +102,9 @@ def employee_form():
 
         st.divider()
 
-        today = date.today()
-        monday = today - timedelta(days=today.weekday())
-
         week_start = st.date_input(
             "Week starting on (Monday)",
-            value=monday
+            value=get_monday()
         )
 
         weekdays = [
@@ -119,13 +118,13 @@ def employee_form():
         ]
 
         required_days = st.multiselect(
-            f"Choose your days off (exactly {required_days_off})",
+            f"Choose exactly {required_days_off} days off",
             weekdays
         )
 
         st.caption(
-            f"Selected: {len(required_days)} of "
-            f"{required_days_off} required days off."
+            f"Selected: {len(required_days)} "
+            f"of {required_days_off} days."
         )
 
         preferred_shift = st.selectbox(
@@ -139,21 +138,13 @@ def employee_form():
         )
 
         comment = st.text_area(
-            "Additional comment (optional)",
-            placeholder="Write any additional information here..."
+            "Additional comment (optional)"
         )
 
-        submitted = st.button(
-            "Submit availability",
-            type="primary"
-        )
-
-        if submitted:
+        if st.button("Submit availability", type="primary"):
 
             if week_start.weekday() != 0:
-                st.error(
-                    "The selected week must start on Monday."
-                )
+                st.error("The selected week must start on Monday.")
 
             elif len(required_days) != required_days_off:
                 st.error(
@@ -177,18 +168,15 @@ def employee_form():
                 }
 
                 try:
-                    response = (
-                        supabase
-                        .table("weekly_preferences")
-                        .upsert(
-                            payload,
-                            on_conflict="employee_id,week_start_date"
-                        )
-                        .execute()
-                    )
+                    supabase.table(
+                        "weekly_preferences"
+                    ).upsert(
+                        payload,
+                        on_conflict="employee_id,week_start_date"
+                    ).execute()
 
                     st.success(
-                        "Your availability has been submitted successfully!"
+                        "Your availability was submitted successfully!"
                     )
 
                 except Exception as e:
@@ -201,7 +189,7 @@ def employee_form():
 
 
 # ==========================================
-# 5. SELECT APPLICATION PAGE
+# 5. EMPLOYEE PAGE ROUTING
 # ==========================================
 
 page = st.query_params.get("page", "dashboard")
@@ -231,59 +219,238 @@ except Exception as e:
 
 
 # ==========================================
-# 7. DASHBOARD SUMMARY
+# 7. WEEK SELECTION
 # ==========================================
 
 st.divider()
-st.header("Database Overview")
+st.header("Weekly Schedule Management")
 
-col1, col2, col3, col4 = st.columns(4)
+selected_week = st.date_input(
+    "Select week (Monday)",
+    value=get_monday(),
+    key="manager_week"
+)
 
-col1.metric("Employees", len(employees))
-col2.metric("Branches", len(branches))
-col3.metric("Shift Requirements", len(shift_requirements))
-col4.metric("Company Rules", len(company_rules))
+if selected_week.weekday() != 0:
+    st.warning("Please select a Monday.")
+    st.stop()
 
 
 # ==========================================
-# 8. DATABASE TABLES
+# 8. LOAD WEEKLY PREFERENCES
 # ==========================================
+
+try:
+    preferences = load_table("weekly_preferences")
+
+except Exception as e:
+    st.error("Could not load weekly preferences.")
+    st.exception(e)
+    st.stop()
+
+
+if not preferences.empty:
+
+    preferences["week_start_date"] = pd.to_datetime(
+        preferences["week_start_date"]
+    ).dt.date
+
+    week_preferences = preferences[
+        preferences["week_start_date"] == selected_week
+    ].copy()
+
+else:
+    week_preferences = pd.DataFrame()
+
+
+# ==========================================
+# 9. MERGE EMPLOYEES AND SUBMISSIONS
+# ==========================================
+
+active_employees = employees[
+    employees["employment_status"] == "Active"
+].copy()
+
+if not week_preferences.empty:
+
+    week_preferences = week_preferences.drop_duplicates(
+        subset=["employee_id"],
+        keep="last"
+    )
+
+    weekly_view = active_employees.merge(
+        week_preferences[
+            [
+                "employee_id",
+                "required_days_off",
+                "preferred_shift",
+                "long_shift_consent",
+                "submission_status",
+                "comment",
+                "submitted_at"
+            ]
+        ],
+        on="employee_id",
+        how="left"
+    )
+
+else:
+    weekly_view = active_employees.copy()
+
+    for column in [
+        "required_days_off",
+        "preferred_shift",
+        "long_shift_consent",
+        "submission_status",
+        "comment",
+        "submitted_at"
+    ]:
+        weekly_view[column] = None
+
+
+weekly_view["submission_status"] = (
+    weekly_view["submission_status"].fillna("Missing")
+)
+
+weekly_view["required_days_off"] = weekly_view[
+    "required_days_off"
+].apply(
+    lambda x: ", ".join(x) if isinstance(x, list) else "—"
+)
+
+for column in [
+    "preferred_shift",
+    "long_shift_consent",
+    "comment",
+    "submitted_at"
+]:
+    weekly_view[column] = weekly_view[column].fillna("—")
+
+
+# ==========================================
+# 10. WEEKLY SUBMISSION SUMMARY
+# ==========================================
+
+total_employees = len(active_employees)
+
+received_count = int(
+    (weekly_view["submission_status"] == "Received").sum()
+)
+
+missing_count = total_employees - received_count
 
 st.divider()
+st.header("Weekly Submission Overview")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Active Employees", total_employees)
+col2.metric("Received Submissions", received_count)
+col3.metric("Missing Submissions", missing_count)
+
+
+# ==========================================
+# 11. DASHBOARD TABS
+# ==========================================
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Employees",
     "Branches",
     "Shift Requirements",
-    "Company Rules"
+    "Company Rules",
+    "Weekly Preferences"
 ])
+
 
 with tab1:
     st.subheader("Employees")
-    st.dataframe(employees, use_container_width=True)
+    st.dataframe(
+        employees,
+        use_container_width=True,
+        hide_index=True
+    )
+
 
 with tab2:
     st.subheader("Branches")
-    st.dataframe(branches, use_container_width=True)
+    st.dataframe(
+        branches,
+        use_container_width=True,
+        hide_index=True
+    )
+
 
 with tab3:
     st.subheader("Shift Requirements")
-    st.dataframe(shift_requirements, use_container_width=True)
+    st.dataframe(
+        shift_requirements,
+        use_container_width=True,
+        hide_index=True
+    )
+
 
 with tab4:
     st.subheader("Company Rules")
-    st.dataframe(company_rules, use_container_width=True)
+    st.dataframe(
+        company_rules,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+with tab5:
+    st.subheader("Weekly Employee Preferences")
+
+    st.write(
+        f"Week starting: {selected_week}"
+    )
+
+    st.dataframe(
+        weekly_view[
+            [
+                "employee_id",
+                "work_days_per_week",
+                "days_off_per_week",
+                "required_days_off",
+                "preferred_shift",
+                "long_shift_consent",
+                "submission_status",
+                "comment"
+            ]
+        ],
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.divider()
+
+    st.subheader("Employees with Missing Submissions")
+
+    missing_employees = weekly_view[
+        weekly_view["submission_status"] == "Missing"
+    ]
+
+    if missing_employees.empty:
+        st.success("All employees have submitted their preferences.")
+
+    else:
+        st.dataframe(
+            missing_employees[
+                ["employee_id", "work_days_per_week", "days_off_per_week"]
+            ],
+            use_container_width=True,
+            hide_index=True
+        )
 
 
 # ==========================================
-# 9. FOOTER
+# 12. FOOTER
 # ==========================================
 
 st.divider()
+
 st.caption(
     "AI Shift Planner | Manager Dashboard"
 )
-
-
 
 
