@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 
@@ -60,55 +59,111 @@ def get_monday():
 
 def save_validation_issues(issues, selected_week):
     """
-    Save Validation Engine results to Supabase.
+    Synchronize validation issues for one selected week.
 
-    Unique issue identification:
-    week_start_date + employee_id + issue_type.
-
-    Repeated validation runs update existing records
-    instead of creating duplicates.
+    - Current issues are inserted or updated as Open.
+    - Old Open issues that no longer occur are changed to Resolved.
+    - Existing records are never deleted.
+    - Other weeks are never modified.
     """
 
-    if not issues:
-        return 0
-
     week_label = selected_week.isoformat()
+
+    # Build a set of issue keys found in the current validation run.
+    current_issue_keys = set()
     records = []
 
     for issue in issues:
+
+        employee_id = issue.get("employee_id")
+        issue_type = issue["issue_type"]
+
+        issue_key = (
+            str(employee_id) if employee_id is not None else None,
+            str(issue_type)
+        )
+
+        current_issue_keys.add(issue_key)
 
         description = (
             f"Week starting {week_label}. "
             f"{issue['description']}"
         )
 
-        record = {
+        records.append({
             "run_id": None,
-            "employee_id": issue.get("employee_id"),
+            "employee_id": employee_id,
             "week_start_date": week_label,
             "work_date": None,
-            "issue_type": issue["issue_type"],
+            "issue_type": issue_type,
             "severity": issue["severity"],
             "description": description,
             "recommended_action": issue.get(
                 "recommended_action"
             ),
             "resolution_status": "Open"
-        }
+        })
 
-        records.append(record)
+    # Save or update all issues from the current validation run.
+    # If there are no current issues, this step is simply skipped.
+    if records:
 
-    response = (
+        (
+            supabase
+            .table("validation_issues")
+            .upsert(
+                records,
+                on_conflict="week_start_date,employee_id,issue_type"
+            )
+            .execute()
+        )
+
+    # Read existing issues for this week after the upsert.
+    # Only records with status Open are candidates for resolution.
+    existing_response = (
         supabase
         .table("validation_issues")
-        .upsert(
-            records,
-            on_conflict="week_start_date,employee_id,issue_type"
+        .select(
+            "issue_id, employee_id, issue_type, resolution_status"
         )
+        .eq("week_start_date", week_label)
+        .eq("resolution_status", "Open")
         .execute()
     )
 
-    return len(response.data or records)
+    existing_open_issues = existing_response.data or []
+
+    resolved_count = 0
+
+    # Resolve only old Open issues that are absent from the current run.
+    for old_issue in existing_open_issues:
+
+        old_key = (
+            str(old_issue["employee_id"])
+            if old_issue.get("employee_id") is not None
+            else None,
+            str(old_issue["issue_type"])
+        )
+
+        if old_key not in current_issue_keys:
+
+            (
+                supabase
+                .table("validation_issues")
+                .update({
+                    "resolution_status": "Resolved"
+                })
+                .eq("issue_id", old_issue["issue_id"])
+                .eq("resolution_status", "Open")
+                .execute()
+            )
+
+            resolved_count += 1
+
+    return {
+        "saved_count": len(records),
+        "resolved_count": resolved_count
+    }
 
 
 # ==========================================
@@ -155,7 +210,6 @@ def validate_week_data(active_employees, week_preferences):
         days_off = int(employee["days_off_per_week"])
 
         # Check employee contract
-
         if work_days + days_off != 7:
 
             issues.append({
@@ -171,7 +225,6 @@ def validate_week_data(active_employees, week_preferences):
             })
 
         # Check submission existence
-
         if employee_id not in submissions:
 
             issues.append({
@@ -191,7 +244,6 @@ def validate_week_data(active_employees, week_preferences):
         submission = submissions[employee_id]
 
         # Check submission status
-
         if submission.get("submission_status") != "Received":
 
             issues.append({
@@ -209,7 +261,6 @@ def validate_week_data(active_employees, week_preferences):
             continue
 
         # Check required days off
-
         selected_days = submission.get("required_days_off")
 
         if not isinstance(selected_days, list):
@@ -277,7 +328,6 @@ def validate_week_data(active_employees, week_preferences):
                 })
 
         # Check preferred shift
-
         preferred_shift = submission.get("preferred_shift")
 
         if preferred_shift not in valid_shifts:
@@ -295,7 +345,6 @@ def validate_week_data(active_employees, week_preferences):
             })
 
         # Check Long Shift consent
-
         consent = submission.get("long_shift_consent")
 
         if consent not in valid_consent:
@@ -843,14 +892,15 @@ with tab6:
 
         try:
 
-            saved_count = save_validation_issues(
+            sync_result = save_validation_issues(
                 validation_issues,
                 selected_week
             )
 
             st.session_state["validation_save_status"] = {
                 "week": selected_week.isoformat(),
-                "saved_count": saved_count,
+                "saved_count": sync_result["saved_count"],
+                "resolved_count": sync_result["resolved_count"],
                 "error": None
             }
 
@@ -859,6 +909,7 @@ with tab6:
             st.session_state["validation_save_status"] = {
                 "week": selected_week.isoformat(),
                 "saved_count": 0,
+                "resolved_count": 0,
                 "error": str(e)
             }
 
@@ -928,22 +979,19 @@ with tab6:
             if save_status["error"]:
 
                 st.error(
-                    "Validation completed, but saving to Supabase failed."
+                    "Validation completed, but synchronizing "
+                    "issues in Supabase failed."
                 )
 
                 st.code(save_status["error"])
 
-            elif save_status["saved_count"] > 0:
-
-                st.success(
-                    f"Successfully saved "
-                    f"{save_status['saved_count']} issues to Supabase."
-                )
-
             else:
 
                 st.success(
-                    "Validation completed. No issues to save."
+                    f"Current issues saved/updated: "
+                    f"{save_status['saved_count']}. "
+                    f"Old issues marked Resolved: "
+                    f"{save_status['resolved_count']}."
                 )
 
         if issues:
