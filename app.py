@@ -43,6 +43,7 @@ except Exception as e:
 # ==========================================
 
 def load_table(table_name):
+
     response = (
         supabase
         .table(table_name)
@@ -54,8 +55,56 @@ def load_table(table_name):
 
 
 def get_monday():
+
     today = date.today()
+
     return today - timedelta(days=today.weekday())
+
+
+def save_validation_issues(issues, selected_week):
+
+    """
+    Save Validation Engine results to Supabase.
+    Each issue is stored as a separate database record.
+    """
+
+    if not issues:
+        return 0
+
+    week_label = selected_week.isoformat()
+
+    records = []
+
+    for issue in issues:
+
+        description = (
+            f"Week starting {week_label}. "
+            f"{issue['description']}"
+        )
+
+        record = {
+            "run_id": None,
+            "employee_id": issue.get("employee_id"),
+            "branch": None,
+            "work_date": None,
+            "issue_type": issue["issue_type"],
+            "severity": issue["severity"],
+            "description": description,
+            "recommended_action": issue.get(
+                "recommended_action"
+            )
+        }
+
+        records.append(record)
+
+    response = (
+        supabase
+        .table("validation_issues")
+        .insert(records)
+        .execute()
+    )
+
+    return len(response.data or records)
 
 
 # ==========================================
@@ -93,7 +142,9 @@ def validate_week_data(active_employees, week_preferences):
     submissions = {}
 
     if not week_preferences.empty:
+
         for _, row in week_preferences.iterrows():
+
             submissions[row["employee_id"]] = row
 
     # Check every active employee
@@ -206,7 +257,9 @@ def validate_week_data(active_employees, week_preferences):
 
             # Check duplicate days
 
-            if len(selected_days) != len(set(map(str, selected_days))):
+            if len(selected_days) != len(
+                set(map(str, selected_days))
+            ):
 
                 issues.append({
                     "employee_id": employee_id,
@@ -313,9 +366,11 @@ def employee_form():
     )
 
     try:
+
         employees = load_table("employees")
 
         if employees.empty:
+
             st.warning("No employees found.")
             return
 
@@ -324,6 +379,7 @@ def employee_form():
         ].copy()
 
         if active_employees.empty:
+
             st.warning("No active employees found.")
             return
 
@@ -420,6 +476,7 @@ def employee_form():
                 }
 
                 try:
+
                     supabase.table(
                         "weekly_preferences"
                     ).upsert(
@@ -468,6 +525,7 @@ st.title("📅 AI Shift Planner")
 st.subheader("Manager Dashboard")
 
 try:
+
     employees = load_table("employees")
     branches = load_table("branches")
     shift_requirements = load_table("shift_requirements")
@@ -510,6 +568,7 @@ if selected_week.weekday() != 0:
 # ==========================================
 
 try:
+
     preferences = load_table("weekly_preferences")
 
 except Exception as e:
@@ -806,6 +865,29 @@ with tab6:
             "issues": validation_issues
         }
 
+        # Save validation results to Supabase
+
+        try:
+
+            saved_count = save_validation_issues(
+                validation_issues,
+                selected_week
+            )
+
+            st.session_state["validation_save_status"] = {
+                "week": selected_week.isoformat(),
+                "saved_count": saved_count,
+                "error": None
+            }
+
+        except Exception as e:
+
+            st.session_state["validation_save_status"] = {
+                "week": selected_week.isoformat(),
+                "saved_count": 0,
+                "error": str(e)
+            }
+
     result = st.session_state.get(
         "validation_result"
     )
@@ -860,6 +942,38 @@ with tab6:
                 "READY — All employee submissions passed validation."
             )
 
+        # Show database save status
+
+        save_status = st.session_state.get(
+            "validation_save_status"
+        )
+
+        if (
+            save_status
+            and save_status["week"] == selected_week.isoformat()
+        ):
+
+            if save_status["error"]:
+
+                st.error(
+                    "Validation completed, but saving to Supabase failed."
+                )
+
+                st.code(save_status["error"])
+
+            elif save_status["saved_count"] > 0:
+
+                st.success(
+                    f"Successfully saved "
+                    f"{save_status['saved_count']} issues to Supabase."
+                )
+
+            else:
+
+                st.success(
+                    "Validation completed. No issues to save."
+                )
+
         if issues:
 
             st.subheader("Validation Issues")
@@ -893,7 +1007,3 @@ st.divider()
 st.caption(
     "AI Shift Planner | Manager Dashboard"
 )
-
-
-
-
