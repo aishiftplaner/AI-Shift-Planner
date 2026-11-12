@@ -98,7 +98,8 @@ def save_validation_issues(issues, selected_week):
             "recommended_action": issue.get(
                 "recommended_action"
             ),
-            "resolution_status": "OPEN"
+            # Supabase CHECK constraint allows lowercase "open"
+            "resolution_status": "open"
         }
 
         records.append(record)
@@ -319,7 +320,7 @@ def validate_week_data(active_employees, week_preferences):
                 "recommended_action": (
                     "Ask the employee to clarify their Long Shift consent."
                 )
-            })
+            )
 
         elif consent == "Unknown":
 
@@ -983,4 +984,3 @@ st.divider()
 st.caption(
     "AI Shift Planner | Manager Dashboard"
 )
- 
