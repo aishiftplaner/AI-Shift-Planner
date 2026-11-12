@@ -56,7 +56,217 @@ def get_monday():
 
 
 # ==========================================
-# 4. EMPLOYEE FORM
+# 4. VALIDATION ENGINE
+# ==========================================
+
+def validate_week_data(active_employees, week_preferences):
+
+    issues = []
+
+    weekdays = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday"
+    ]
+
+    valid_shifts = ["Morning", "Evening", "Flexible"]
+    valid_consent = ["Yes", "No", "Unknown"]
+
+    submissions = {}
+
+    if not week_preferences.empty:
+        for _, row in week_preferences.iterrows():
+            submissions[row["employee_id"]] = row
+
+    for _, employee in active_employees.iterrows():
+
+        employee_id = employee["employee_id"]
+
+        work_days = int(employee["work_days_per_week"])
+        days_off = int(employee["days_off_per_week"])
+
+        # Check employee contract
+
+        if work_days + days_off != 7:
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "INVALID_CONTRACT",
+                "severity": "Critical",
+                "description": (
+                    "Working days and days off do not add up to 7."
+                ),
+                "recommended_action": (
+                    "Check the employee contract data."
+                )
+            })
+
+        # Check submission existence
+
+        if employee_id not in submissions:
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "MISSING_SUBMISSION",
+                "severity": "Critical",
+                "description": (
+                    "Employee has not submitted weekly preferences."
+                ),
+                "recommended_action": (
+                    "Request the employee to complete the form."
+                )
+            })
+
+            continue
+
+        submission = submissions[employee_id]
+
+        # Check submission status
+
+        if submission.get("submission_status") != "Received":
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "INVALID_SUBMISSION_STATUS",
+                "severity": "Critical",
+                "description": (
+                    "Submission is not marked as Received."
+                ),
+                "recommended_action": (
+                    "Check and correct the submission."
+                )
+            })
+
+            continue
+
+        # Check days off
+
+        selected_days = submission.get("required_days_off")
+
+        if not isinstance(selected_days, list):
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "INVALID_DAYS_OFF",
+                "severity": "Critical",
+                "description": (
+                    "Days off are missing or have an invalid format."
+                ),
+                "recommended_action": (
+                    "Ask the employee to submit days off again."
+                )
+            })
+
+        else:
+
+            if len(selected_days) != days_off:
+
+                issues.append({
+                    "employee_id": employee_id,
+                    "issue_type": "WRONG_DAYS_OFF_COUNT",
+                    "severity": "Critical",
+                    "description": (
+                        f"Contract requires {days_off} days off, "
+                        f"but employee selected {len(selected_days)}."
+                    ),
+                    "recommended_action": (
+                        "Ask the employee to select the correct number of days."
+                    )
+                })
+
+            if len(selected_days) != len(set(selected_days)):
+
+                issues.append({
+                    "employee_id": employee_id,
+                    "issue_type": "DUPLICATE_DAYS",
+                    "severity": "Critical",
+                    "description": (
+                        "The same day was selected more than once."
+                    ),
+                    "recommended_action": (
+                        "Correct the selected days off."
+                    )
+                })
+
+            invalid_days = [
+                day for day in selected_days
+                if day not in weekdays
+            ]
+
+            if invalid_days:
+
+                issues.append({
+                    "employee_id": employee_id,
+                    "issue_type": "INVALID_WEEKDAY",
+                    "severity": "Critical",
+                    "description": (
+                        f"Invalid weekday values: {invalid_days}"
+                    ),
+                    "recommended_action": (
+                        "Use valid weekday names."
+                    )
+                })
+
+        # Check preferred shift
+
+        preferred_shift = submission.get("preferred_shift")
+
+        if preferred_shift not in valid_shifts:
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "INVALID_SHIFT_PREFERENCE",
+                "severity": "Critical",
+                "description": (
+                    "Preferred shift is missing or invalid."
+                ),
+                "recommended_action": (
+                    "Ask the employee to select a valid shift preference."
+                )
+            })
+
+        # Check Long Shift consent
+
+        consent = submission.get("long_shift_consent")
+
+        if consent not in valid_consent:
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "INVALID_LONG_SHIFT_CONSENT",
+                "severity": "Critical",
+                "description": (
+                    "Long Shift consent is missing or invalid."
+                ),
+                "recommended_action": (
+                    "Ask the employee to clarify their Long Shift consent."
+                )
+            )
+
+        elif consent == "Unknown":
+
+            issues.append({
+                "employee_id": employee_id,
+                "issue_type": "UNKNOWN_LONG_SHIFT_CONSENT",
+                "severity": "Critical",
+                "description": (
+                    "Long Shift consent is Unknown. "
+                    "Scheduling is blocked until clarified."
+                ),
+                "recommended_action": (
+                    "Ask the employee to select Yes or No."
+                )
+            })
+
+    return issues
+
+
+# ==========================================
+# 5. EMPLOYEE AVAILABILITY FORM
 # ==========================================
 
 def employee_form():
@@ -189,7 +399,7 @@ def employee_form():
 
 
 # ==========================================
-# 5. EMPLOYEE PAGE ROUTING
+# 6. EMPLOYEE PAGE ROUTING
 # ==========================================
 
 page = st.query_params.get("page", "dashboard")
@@ -200,7 +410,7 @@ if page == "employee":
 
 
 # ==========================================
-# 6. MANAGER DASHBOARD
+# 7. MANAGER DASHBOARD
 # ==========================================
 
 st.title("📅 AI Shift Planner")
@@ -219,7 +429,7 @@ except Exception as e:
 
 
 # ==========================================
-# 7. WEEK SELECTION
+# 8. WEEK SELECTION
 # ==========================================
 
 st.divider()
@@ -237,7 +447,7 @@ if selected_week.weekday() != 0:
 
 
 # ==========================================
-# 8. LOAD WEEKLY PREFERENCES
+# 9. LOAD WEEKLY PREFERENCES
 # ==========================================
 
 try:
@@ -264,7 +474,7 @@ else:
 
 
 # ==========================================
-# 9. MERGE EMPLOYEES AND SUBMISSIONS
+# 10. PREPARE EMPLOYEE DATA
 # ==========================================
 
 active_employees = employees[
@@ -328,7 +538,7 @@ for column in [
 
 
 # ==========================================
-# 10. WEEKLY SUBMISSION SUMMARY
+# 11. WEEKLY SUBMISSION SUMMARY
 # ==========================================
 
 total_employees = len(active_employees)
@@ -350,15 +560,16 @@ col3.metric("Missing Submissions", missing_count)
 
 
 # ==========================================
-# 11. DASHBOARD TABS
+# 12. DASHBOARD TABS
 # ==========================================
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "Employees",
     "Branches",
     "Shift Requirements",
     "Company Rules",
-    "Weekly Preferences"
+    "Weekly Preferences",
+    "Validation Engine"
 ])
 
 
@@ -444,7 +655,101 @@ with tab5:
 
 
 # ==========================================
-# 12. FOOTER
+# 13. VALIDATION ENGINE INTERFACE
+# ==========================================
+
+with tab6:
+
+    st.subheader("Weekly Data Validation")
+
+    st.write(
+        "The Validation Engine checks employee submissions "
+        "before the scheduling algorithm can start."
+    )
+
+    st.write(f"Week starting: {selected_week}")
+
+    if st.button("Run Validation", type="primary"):
+
+        validation_issues = validate_week_data(
+            active_employees,
+            week_preferences
+        )
+
+        st.session_state["validation_result"] = {
+            "week": selected_week.isoformat(),
+            "issues": validation_issues
+        }
+
+
+    result = st.session_state.get("validation_result")
+
+    if result and result["week"] == selected_week.isoformat():
+
+        issues = result["issues"]
+
+        critical_count = sum(
+            1 for issue in issues
+            if issue["severity"] == "Critical"
+        )
+
+        warning_count = sum(
+            1 for issue in issues
+            if issue["severity"] == "Warning"
+        )
+
+        st.divider()
+
+        col1, col2 = st.columns(2)
+
+        col1.metric("Critical Issues", critical_count)
+        col2.metric("Warnings", warning_count)
+
+        if critical_count > 0:
+
+            st.error(
+                "BLOCKED — Scheduling cannot start. "
+                "Critical issues must be resolved."
+            )
+
+        elif warning_count > 0:
+
+            st.warning(
+                "Review the warnings before proceeding."
+            )
+
+        else:
+
+            st.success(
+                "READY — All employee submissions passed validation."
+            )
+
+        if issues:
+
+            st.subheader("Validation Issues")
+
+            st.dataframe(
+                pd.DataFrame(issues),
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.success(
+                "No validation issues found."
+            )
+
+    else:
+
+        st.info(
+            "Select a week and click Run Validation "
+            "to check the submissions."
+        )
+
+
+# ==========================================
+# 14. FOOTER
 # ==========================================
 
 st.divider()
@@ -452,5 +757,6 @@ st.divider()
 st.caption(
     "AI Shift Planner | Manager Dashboard"
 )
+
 
 
