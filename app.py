@@ -93,7 +93,7 @@ def save_validation_issues(issues, selected_week):
             "recommended_action": issue.get(
                 "recommended_action"
             ),
-            "resolution_status": "OPEN"
+            "resolution_status": "Open"
         }
 
         records.append(record)
