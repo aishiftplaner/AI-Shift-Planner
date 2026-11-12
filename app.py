@@ -65,7 +65,12 @@ def save_validation_issues(issues, selected_week):
 
     """
     Save Validation Engine results to Supabase.
-    Each issue is stored as a separate database record.
+
+    Each issue is identified by:
+    week_start_date + employee_id + issue_type.
+
+    Repeated validation runs update existing records
+    instead of creating duplicates.
     """
 
     if not issues:
@@ -85,13 +90,15 @@ def save_validation_issues(issues, selected_week):
         record = {
             "run_id": None,
             "employee_id": issue.get("employee_id"),
+            "week_start_date": week_label,
             "work_date": None,
             "issue_type": issue["issue_type"],
             "severity": issue["severity"],
             "description": description,
             "recommended_action": issue.get(
                 "recommended_action"
-            )
+            ),
+            "resolution_status": "open"
         }
 
         records.append(record)
@@ -99,7 +106,10 @@ def save_validation_issues(issues, selected_week):
     response = (
         supabase
         .table("validation_issues")
-        .insert(records)
+        .upsert(
+            records,
+            on_conflict="week_start_date,employee_id,issue_type"
+        )
         .execute()
     )
 
