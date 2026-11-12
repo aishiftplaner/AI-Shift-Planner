@@ -43,7 +43,6 @@ except Exception as e:
 # ==========================================
 
 def load_table(table_name):
-
     response = (
         supabase
         .table(table_name)
@@ -55,18 +54,15 @@ def load_table(table_name):
 
 
 def get_monday():
-
     today = date.today()
-
     return today - timedelta(days=today.weekday())
 
 
 def save_validation_issues(issues, selected_week):
-
     """
     Save Validation Engine results to Supabase.
 
-    Each issue is identified by:
+    Unique issue identification:
     week_start_date + employee_id + issue_type.
 
     Repeated validation runs update existing records
@@ -77,7 +73,6 @@ def save_validation_issues(issues, selected_week):
         return 0
 
     week_label = selected_week.isoformat()
-
     records = []
 
     for issue in issues:
@@ -98,7 +93,6 @@ def save_validation_issues(issues, selected_week):
             "recommended_action": issue.get(
                 "recommended_action"
             ),
-            # Supabase CHECK constraint allows lowercase "open"
             "resolution_status": "open"
         }
 
@@ -150,9 +144,7 @@ def validate_week_data(active_employees, week_preferences):
     submissions = {}
 
     if not week_preferences.empty:
-
         for _, row in week_preferences.iterrows():
-
             submissions[row["employee_id"]] = row
 
     for _, employee in active_employees.iterrows():
@@ -251,9 +243,7 @@ def validate_week_data(active_employees, week_preferences):
                     )
                 })
 
-            if len(selected_days) != len(
-                set(map(str, selected_days))
-            ):
+            if len(selected_days) != len(set(map(str, selected_days))):
 
                 issues.append({
                     "employee_id": employee_id,
@@ -320,7 +310,7 @@ def validate_week_data(active_employees, week_preferences):
                 "recommended_action": (
                     "Ask the employee to clarify their Long Shift consent."
                 )
-            )
+            })
 
         elif consent == "Unknown":
 
@@ -358,7 +348,6 @@ def employee_form():
         employees = load_table("employees")
 
         if employees.empty:
-
             st.warning("No employees found.")
             return
 
@@ -367,7 +356,6 @@ def employee_form():
         ].copy()
 
         if active_employees.empty:
-
             st.warning("No active employees found.")
             return
 
@@ -976,7 +964,7 @@ with tab6:
 
 
 # ==========================================
-# 14. FOOTER
+# 13. FOOTER
 # ==========================================
 
 st.divider()
