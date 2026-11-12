@@ -1,7 +1,10 @@
 
 import streamlit as st
 import pandas as pd
+
 from supabase import create_client
+from datetime import date, datetime, timedelta, timezone
+
 
 # ==========================================
 # 1. PAGE SETTINGS
@@ -13,8 +16,6 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📅 AI Shift Planner")
-st.subheader("Manager Dashboard")
 
 # ==========================================
 # 2. SUPABASE CONNECTION
@@ -30,8 +31,6 @@ def init_supabase():
 
 try:
     supabase = init_supabase()
-    st.success("Supabase connection successful!")
-
 except Exception as e:
     st.error("Could not connect to Supabase.")
     st.exception(e)
@@ -54,8 +53,170 @@ def load_table(table_name):
 
 
 # ==========================================
-# 4. LOAD DATABASE TABLES
+# 4. EMPLOYEE AVAILABILITY FORM
 # ==========================================
+
+def employee_form():
+
+    st.title("📅 Employee Availability Form")
+    st.write(
+        "Please submit your availability "
+        "and shift preferences for the upcoming week."
+    )
+
+    try:
+        employees = load_table("employees")
+
+        if employees.empty:
+            st.error("No employees found in the database.")
+            return
+
+        active_employees = employees[
+            employees["employment_status"] == "Active"
+        ].copy()
+
+        active_employees = active_employees.sort_values(
+            "employee_id"
+        )
+
+        employee_ids = active_employees["employee_id"].tolist()
+
+        employee_id = st.selectbox(
+            "Your Employee ID",
+            employee_ids
+        )
+
+        employee = active_employees[
+            active_employees["employee_id"] == employee_id
+        ].iloc[0]
+
+        required_days_off = int(employee["days_off_per_week"])
+        work_days = int(employee["work_days_per_week"])
+
+        st.info(
+            f"Your contract: {work_days} working days "
+            f"and {required_days_off} days off per week."
+        )
+
+        st.divider()
+
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+
+        week_start = st.date_input(
+            "Week starting on (Monday)",
+            value=monday
+        )
+
+        weekdays = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday"
+        ]
+
+        required_days = st.multiselect(
+            f"Choose your days off (exactly {required_days_off})",
+            weekdays
+        )
+
+        st.caption(
+            f"Selected: {len(required_days)} of "
+            f"{required_days_off} required days off."
+        )
+
+        preferred_shift = st.selectbox(
+            "Preferred shift",
+            ["Morning", "Evening", "Flexible"]
+        )
+
+        long_shift_consent = st.selectbox(
+            "Are you willing to work a Long Shift (09:00–21:00)?",
+            ["Unknown", "Yes", "No"]
+        )
+
+        comment = st.text_area(
+            "Additional comment (optional)",
+            placeholder="Write any additional information here..."
+        )
+
+        submitted = st.button(
+            "Submit availability",
+            type="primary"
+        )
+
+        if submitted:
+
+            if week_start.weekday() != 0:
+                st.error(
+                    "The selected week must start on Monday."
+                )
+
+            elif len(required_days) != required_days_off:
+                st.error(
+                    f"Please select exactly "
+                    f"{required_days_off} days off."
+                )
+
+            else:
+
+                payload = {
+                    "employee_id": employee_id,
+                    "week_start_date": week_start.isoformat(),
+                    "required_days_off": required_days,
+                    "preferred_shift": preferred_shift,
+                    "long_shift_consent": long_shift_consent,
+                    "submission_status": "Received",
+                    "comment": comment,
+                    "submitted_at": datetime.now(
+                        timezone.utc
+                    ).isoformat()
+                }
+
+                try:
+                    response = (
+                        supabase
+                        .table("weekly_preferences")
+                        .upsert(
+                            payload,
+                            on_conflict="employee_id,week_start_date"
+                        )
+                        .execute()
+                    )
+
+                    st.success(
+                        "Your availability has been submitted successfully!"
+                    )
+
+                except Exception as e:
+                    st.error("Could not save your submission.")
+                    st.exception(e)
+
+    except Exception as e:
+        st.error("Could not load employee data.")
+        st.exception(e)
+
+
+# ==========================================
+# 5. SELECT APPLICATION PAGE
+# ==========================================
+
+page = st.query_params.get("page", "dashboard")
+
+if page == "employee":
+    employee_form()
+    st.stop()
+
+
+# ==========================================
+# 6. MANAGER DASHBOARD
+# ==========================================
+
+st.title("📅 AI Shift Planner")
+st.subheader("Manager Dashboard")
 
 try:
     employees = load_table("employees")
@@ -70,7 +231,7 @@ except Exception as e:
 
 
 # ==========================================
-# 5. DASHBOARD SUMMARY
+# 7. DASHBOARD SUMMARY
 # ==========================================
 
 st.divider()
@@ -85,7 +246,7 @@ col4.metric("Company Rules", len(company_rules))
 
 
 # ==========================================
-# 6. DATABASE TABLES
+# 8. DATABASE TABLES
 # ==========================================
 
 st.divider()
@@ -115,11 +276,14 @@ with tab4:
 
 
 # ==========================================
-# 7. CONNECTION STATUS
+# 9. FOOTER
 # ==========================================
 
 st.divider()
-st.caption("AI Shift Planner | Database connection active")
+st.caption(
+    "AI Shift Planner | Manager Dashboard"
+)
+
 
 
 
