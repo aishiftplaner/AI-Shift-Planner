@@ -25,11 +25,13 @@ st.set_page_config(
 def init_supabase():
     url = st.secrets["SUPABASE_URL"]
     secret_key = st.secrets["SUPABASE_SECRET_KEY"]
+
     return create_client(url, secret_key)
 
 
 try:
     supabase = init_supabase()
+
 except Exception as e:
     st.error("Could not connect to Supabase.")
     st.exception(e)
@@ -47,7 +49,8 @@ def load_table(table_name):
         .select("*")
         .execute()
     )
-    return pd.DataFrame(response.data)
+
+    return pd.DataFrame(response.data or [])
 
 
 def get_monday():
@@ -73,14 +76,27 @@ def validate_week_data(active_employees, week_preferences):
         "Sunday"
     ]
 
-    valid_shifts = ["Morning", "Evening", "Flexible"]
-    valid_consent = ["Yes", "No", "Unknown"]
+    valid_shifts = [
+        "Morning",
+        "Evening",
+        "Flexible"
+    ]
+
+    valid_consent = [
+        "Yes",
+        "No",
+        "Unknown"
+    ]
+
+    # Prepare employee submissions
 
     submissions = {}
 
     if not week_preferences.empty:
         for _, row in week_preferences.iterrows():
             submissions[row["employee_id"]] = row
+
+    # Check every active employee
 
     for _, employee in active_employees.iterrows():
 
@@ -89,7 +105,9 @@ def validate_week_data(active_employees, week_preferences):
         work_days = int(employee["work_days_per_week"])
         days_off = int(employee["days_off_per_week"])
 
+        # --------------------------------------
         # Check employee contract
+        # --------------------------------------
 
         if work_days + days_off != 7:
 
@@ -105,7 +123,9 @@ def validate_week_data(active_employees, week_preferences):
                 )
             })
 
+        # --------------------------------------
         # Check submission existence
+        # --------------------------------------
 
         if employee_id not in submissions:
 
@@ -125,7 +145,9 @@ def validate_week_data(active_employees, week_preferences):
 
         submission = submissions[employee_id]
 
+        # --------------------------------------
         # Check submission status
+        # --------------------------------------
 
         if submission.get("submission_status") != "Received":
 
@@ -143,7 +165,9 @@ def validate_week_data(active_employees, week_preferences):
 
             continue
 
-        # Check days off
+        # --------------------------------------
+        # Check required days off
+        # --------------------------------------
 
         selected_days = submission.get("required_days_off")
 
@@ -163,6 +187,8 @@ def validate_week_data(active_employees, week_preferences):
 
         else:
 
+            # Check number of days off
+
             if len(selected_days) != days_off:
 
                 issues.append({
@@ -178,7 +204,9 @@ def validate_week_data(active_employees, week_preferences):
                     )
                 })
 
-            if len(selected_days) != len(set(selected_days)):
+            # Check duplicate days
+
+            if len(selected_days) != len(set(map(str, selected_days))):
 
                 issues.append({
                     "employee_id": employee_id,
@@ -191,6 +219,8 @@ def validate_week_data(active_employees, week_preferences):
                         "Correct the selected days off."
                     )
                 })
+
+            # Check valid weekday names
 
             invalid_days = [
                 day for day in selected_days
@@ -211,7 +241,9 @@ def validate_week_data(active_employees, week_preferences):
                     )
                 })
 
+        # --------------------------------------
         # Check preferred shift
+        # --------------------------------------
 
         preferred_shift = submission.get("preferred_shift")
 
@@ -229,7 +261,9 @@ def validate_week_data(active_employees, week_preferences):
                 )
             })
 
+        # --------------------------------------
         # Check Long Shift consent
+        # --------------------------------------
 
         consent = submission.get("long_shift_consent")
 
@@ -245,7 +279,7 @@ def validate_week_data(active_employees, week_preferences):
                 "recommended_action": (
                     "Ask the employee to clarify their Long Shift consent."
                 )
-            )
+            })
 
         elif consent == "Unknown":
 
@@ -288,6 +322,10 @@ def employee_form():
         active_employees = employees[
             employees["employment_status"] == "Active"
         ].copy()
+
+        if active_employees.empty:
+            st.warning("No active employees found.")
+            return
 
         active_employees = active_employees.sort_values(
             "employee_id"
@@ -354,9 +392,13 @@ def employee_form():
         if st.button("Submit availability", type="primary"):
 
             if week_start.weekday() != 0:
-                st.error("The selected week must start on Monday.")
+
+                st.error(
+                    "The selected week must start on Monday."
+                )
 
             elif len(required_days) != required_days_off:
+
                 st.error(
                     f"Please select exactly "
                     f"{required_days_off} days off."
@@ -390,11 +432,19 @@ def employee_form():
                     )
 
                 except Exception as e:
-                    st.error("Could not save your submission.")
+
+                    st.error(
+                        "Could not save your submission."
+                    )
+
                     st.exception(e)
 
     except Exception as e:
-        st.error("Could not load employee data.")
+
+        st.error(
+            "Could not load employee data."
+        )
+
         st.exception(e)
 
 
@@ -405,6 +455,7 @@ def employee_form():
 page = st.query_params.get("page", "dashboard")
 
 if page == "employee":
+
     employee_form()
     st.stop()
 
@@ -423,7 +474,11 @@ try:
     company_rules = load_table("company_rules")
 
 except Exception as e:
-    st.error("Could not load database tables.")
+
+    st.error(
+        "Could not load database tables."
+    )
+
     st.exception(e)
     st.stop()
 
@@ -442,7 +497,11 @@ selected_week = st.date_input(
 )
 
 if selected_week.weekday() != 0:
-    st.warning("Please select a Monday.")
+
+    st.warning(
+        "Please select a Monday."
+    )
+
     st.stop()
 
 
@@ -454,7 +513,11 @@ try:
     preferences = load_table("weekly_preferences")
 
 except Exception as e:
-    st.error("Could not load weekly preferences.")
+
+    st.error(
+        "Could not load weekly preferences."
+    )
+
     st.exception(e)
     st.stop()
 
@@ -470,6 +533,7 @@ if not preferences.empty:
     ].copy()
 
 else:
+
     week_preferences = pd.DataFrame()
 
 
@@ -480,6 +544,7 @@ else:
 active_employees = employees[
     employees["employment_status"] == "Active"
 ].copy()
+
 
 if not week_preferences.empty:
 
@@ -505,6 +570,7 @@ if not week_preferences.empty:
     )
 
 else:
+
     weekly_view = active_employees.copy()
 
     for column in [
@@ -515,6 +581,7 @@ else:
         "comment",
         "submitted_at"
     ]:
+
         weekly_view[column] = None
 
 
@@ -525,7 +592,9 @@ weekly_view["submission_status"] = (
 weekly_view["required_days_off"] = weekly_view[
     "required_days_off"
 ].apply(
-    lambda x: ", ".join(x) if isinstance(x, list) else "—"
+    lambda x: ", ".join(map(str, x))
+    if isinstance(x, list)
+    else "—"
 )
 
 for column in [
@@ -534,6 +603,7 @@ for column in [
     "comment",
     "submitted_at"
 ]:
+
     weekly_view[column] = weekly_view[column].fillna("—")
 
 
@@ -554,9 +624,20 @@ st.header("Weekly Submission Overview")
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric("Active Employees", total_employees)
-col2.metric("Received Submissions", received_count)
-col3.metric("Missing Submissions", missing_count)
+col1.metric(
+    "Active Employees",
+    total_employees
+)
+
+col2.metric(
+    "Received Submissions",
+    received_count
+)
+
+col3.metric(
+    "Missing Submissions",
+    missing_count
+)
 
 
 # ==========================================
@@ -573,8 +654,14 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 
+# ------------------------------------------
+# TAB 1: EMPLOYEES
+# ------------------------------------------
+
 with tab1:
+
     st.subheader("Employees")
+
     st.dataframe(
         employees,
         use_container_width=True,
@@ -582,8 +669,14 @@ with tab1:
     )
 
 
+# ------------------------------------------
+# TAB 2: BRANCHES
+# ------------------------------------------
+
 with tab2:
+
     st.subheader("Branches")
+
     st.dataframe(
         branches,
         use_container_width=True,
@@ -591,8 +684,14 @@ with tab2:
     )
 
 
+# ------------------------------------------
+# TAB 3: SHIFT REQUIREMENTS
+# ------------------------------------------
+
 with tab3:
+
     st.subheader("Shift Requirements")
+
     st.dataframe(
         shift_requirements,
         use_container_width=True,
@@ -600,8 +699,14 @@ with tab3:
     )
 
 
+# ------------------------------------------
+# TAB 4: COMPANY RULES
+# ------------------------------------------
+
 with tab4:
+
     st.subheader("Company Rules")
+
     st.dataframe(
         company_rules,
         use_container_width=True,
@@ -609,7 +714,12 @@ with tab4:
     )
 
 
+# ------------------------------------------
+# TAB 5: WEEKLY PREFERENCES
+# ------------------------------------------
+
 with tab5:
+
     st.subheader("Weekly Employee Preferences")
 
     st.write(
@@ -635,28 +745,38 @@ with tab5:
 
     st.divider()
 
-    st.subheader("Employees with Missing Submissions")
+    st.subheader(
+        "Employees with Missing Submissions"
+    )
 
     missing_employees = weekly_view[
         weekly_view["submission_status"] == "Missing"
     ]
 
     if missing_employees.empty:
-        st.success("All employees have submitted their preferences.")
+
+        st.success(
+            "All employees have submitted their preferences."
+        )
 
     else:
+
         st.dataframe(
             missing_employees[
-                ["employee_id", "work_days_per_week", "days_off_per_week"]
+                [
+                    "employee_id",
+                    "work_days_per_week",
+                    "days_off_per_week"
+                ]
             ],
             use_container_width=True,
             hide_index=True
         )
 
 
-# ==========================================
-# 13. VALIDATION ENGINE INTERFACE
-# ==========================================
+# ------------------------------------------
+# TAB 6: VALIDATION ENGINE
+# ------------------------------------------
 
 with tab6:
 
@@ -667,9 +787,14 @@ with tab6:
         "before the scheduling algorithm can start."
     )
 
-    st.write(f"Week starting: {selected_week}")
+    st.write(
+        f"Week starting: {selected_week}"
+    )
 
-    if st.button("Run Validation", type="primary"):
+    if st.button(
+        "Run Validation",
+        type="primary"
+    ):
 
         validation_issues = validate_week_data(
             active_employees,
@@ -681,10 +806,14 @@ with tab6:
             "issues": validation_issues
         }
 
+    result = st.session_state.get(
+        "validation_result"
+    )
 
-    result = st.session_state.get("validation_result")
-
-    if result and result["week"] == selected_week.isoformat():
+    if (
+        result
+        and result["week"] == selected_week.isoformat()
+    ):
 
         issues = result["issues"]
 
@@ -702,8 +831,15 @@ with tab6:
 
         col1, col2 = st.columns(2)
 
-        col1.metric("Critical Issues", critical_count)
-        col2.metric("Warnings", warning_count)
+        col1.metric(
+            "Critical Issues",
+            critical_count
+        )
+
+        col2.metric(
+            "Warnings",
+            warning_count
+        )
 
         if critical_count > 0:
 
@@ -757,6 +893,7 @@ st.divider()
 st.caption(
     "AI Shift Planner | Manager Dashboard"
 )
+
 
 
 
