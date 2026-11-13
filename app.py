@@ -1,874 +1,4 @@
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import json
-
-from supabase import create_client
-from google import genai
-
-from datetime import date, datetime, timedelta, timezone, time
-from scipy.optimize import milp, LinearConstraint, Bounds
-from scipy.sparse import lil_matrix
-
-
-# ==========================================
-# 1. PAGE SETTINGS
-# ==========================================
-st.set_page_config(
-    page_title="AI Shift Planner",
-    page_icon="📅",
-    layout="wide"
 )
-
-
-# ==========================================
-# 2. SUPABASE CONNECTION
-# ==========================================
-@st.cache_resource
-def init_supabase():
-    return create_client(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_SECRET_KEY"]
-    )
-
-
-try:
-    supabase = init_supabase()
-except Exception as e:
-    st.error("Could not connect to Supabase.")
-    st.exception(e)
-    st.stop()
-
-
-# ==========================================
-# 2.1. GEMINI AI CONNECTION
-# ==========================================
-GEMINI_MODEL = "gemini-3.5-flash-lite"
-
-
-@st.cache_resource
-def init_gemini():
-    api_key = st.secrets["GEMINI_API_KEY"]
-    return genai.Client(api_key=api_key)
-
-
-def test_gemini_connection():
-    client = init_gemini()
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=(
-            "Reply with exactly: "
-            "AI Shift Planner connection successful."
-        )
-    )
-
-    if not response.text:
-        raise RuntimeError("Gemini returned an empty response.")
-
-    return response.text
-
-
-# ==========================================
-# 2.2. AI CONFLICT ANALYSIS
-# ==========================================
-def generate_ai_conflict_analysis(issues, selected_week):
-    """
-    Gemini explains validation findings and proposes manager actions.
-
-    Only anonymized issue information is sent to Gemini.
-    Employee IDs, names and personal comments are excluded.
-    Gemini does not modify the database or schedule.
-    """
-
-    client = init_gemini()
-
-    grouped_issues = {}
-
-    for issue in issues:
-        issue_type = str(issue.get("issue_type", "UNKNOWN"))
-        severity = str(issue.get("severity", "Unknown"))
-        description = str(issue.get("description", "No description"))
-        action = str(
-            issue.get("recommended_action", "No action specified")
-        )
-
-        key = (issue_type, severity, description, action)
-
-        if key not in grouped_issues:
-            grouped_issues[key] = {
-                "issue_type": issue_type,
-                "severity": severity,
-                "description": description,
-                "recommended_action": action,
-                "count": 0
-            }
-
-        grouped_issues[key]["count"] += 1
-
-    safe_issues = list(grouped_issues.values())
-
-    severity_counts = {
-        "Critical": sum(
-            item["count"]
-            for item in safe_issues
-            if item["severity"] == "Critical"
-        ),
-        "Warning": sum(
-            item["count"]
-            for item in safe_issues
-            if item["severity"] == "Warning"
-        ),
-        "Other": sum(
-            item["count"]
-            for item in safe_issues
-            if item["severity"] not in ("Critical", "Warning")
-        )
-    }
-
-    payload = {
-        "week_start_date": selected_week.isoformat(),
-        "total_issues": len(issues),
-        "severity_counts": severity_counts,
-        "grouped_issues": safe_issues
-    }
-
-    prompt = f"""
-You are the AI Conflict Analysis module of an employee shift-planning system.
-
-Analyze the following validation results for the manager.
-
-VALIDATION DATA:
-{json.dumps(payload, ensure_ascii=False, indent=2)}
-
-YOUR TASKS:
-
-1. Give a short overall assessment of the validation results.
-2. Explain each distinct issue type in understandable language.
-3. Explain how the reported issues affect scheduling readiness.
-4. Group repeated issues and mention their counts.
-5. Suggest concrete actions for the manager.
-6. Prioritize Critical issues before Warnings.
-7. If there are no issues, explain that the submitted data passed
-   the current validation checks.
-
-IMPORTANT RULES:
-
-- Use only facts contained in the validation data.
-- Do not invent employees, shifts or staffing shortages.
-- Clearly distinguish confirmed findings from possible consequences.
-- Never recommend violating contract workdays, mandatory days off,
-  Long Shift consent, daily rest or weekly rest requirements.
-- Do not create employee assignments or a weekly schedule.
-- Do not change database records or validation results.
-- The manager makes the final decision.
-- Do not include or infer employee identities.
-- Write in clear, professional English.
-- Use headings and bullet points.
-- Keep the report concise and practical.
-
-Return only the manager-facing analysis.
-"""
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
-    )
-
-    if not response.text:
-        raise RuntimeError("Gemini returned an empty analysis.")
-
-    return response.text
-
-
-# ==========================================
-# 2.3. AI PLANNING ASSISTANT
-# ==========================================
-def generate_ai_planning_assistant(
-    active_employees,
-    week_preferences,
-    shift_requirements,
-    outcome,
-    selected_week,
-    failure_type="solver_infeasible"
-):
-    """
-    Gemini analyzes an unsuccessful scheduling attempt.
-
-    Only aggregated and anonymized information is sent.
-    Gemini proposes scenarios but never changes data or constraints.
-    """
-
-    client = init_gemini()
-
-    employees = active_employees.copy()
-    preferences = week_preferences.copy()
-    requirements = shift_requirements.copy()
-
-    # --------------------------------------
-    # Employee contract summary
-    # --------------------------------------
-    contract_distribution = {}
-
-    if not employees.empty:
-        for contract_days, group in employees.groupby(
-            "work_days_per_week"
-        ):
-            contract_distribution[str(contract_days)] = int(len(group))
-
-    total_employees = int(len(employees))
-
-    total_contract_days = 0
-
-    if not employees.empty:
-        total_contract_days = int(
-            pd.to_numeric(
-                employees["work_days_per_week"],
-                errors="coerce"
-            ).fillna(0).sum()
-        )
-
-    # --------------------------------------
-    # Preference summary
-    # --------------------------------------
-    preference_counts = {
-        "Morning": 0,
-        "Evening": 0,
-        "Flexible": 0,
-        "Unknown": 0
-    }
-
-    consent_counts = {
-        "Yes": 0,
-        "No": 0,
-        "Unknown": 0
-    }
-
-    days_off_distribution = {}
-
-    if not preferences.empty:
-
-        for value, count in preferences[
-            "preferred_shift"
-        ].fillna("Unknown").value_counts().items():
-
-            key = str(value)
-
-            if key in preference_counts:
-                preference_counts[key] += int(count)
-            else:
-                preference_counts["Unknown"] += int(count)
-
-        for value, count in preferences[
-            "long_shift_consent"
-        ].fillna("Unknown").value_counts().items():
-
-            key = str(value)
-
-            if key in consent_counts:
-                consent_counts[key] += int(count)
-            else:
-                consent_counts["Unknown"] += int(count)
-
-        for days in preferences["required_days_off"]:
-            if isinstance(days, list):
-                for day in days:
-                    day_name = str(day)
-                    days_off_distribution[day_name] = (
-                        days_off_distribution.get(day_name, 0) + 1
-                    )
-
-    # --------------------------------------
-    # Shift demand summary
-    # --------------------------------------
-    shift_demand = {
-        "Morning": 0,
-        "Evening": 0,
-        "Long": 0
-    }
-
-    daily_positions = 0
-    requirement_summary = []
-
-    if not requirements.empty:
-
-        req = requirements.copy()
-
-        if "is_active" in req.columns:
-            req = req[req["is_active"] == True].copy()
-
-        if not req.empty:
-
-            for shift in SHIFT_ORDER:
-                values = pd.to_numeric(
-                    req.loc[
-                        req["shift_type"] == shift,
-                        "required_employees"
-                    ],
-                    errors="coerce"
-                ).fillna(0)
-
-                shift_demand[shift] = int(values.sum())
-
-            daily_positions = int(
-                sum(shift_demand.values())
-            )
-
-            for _, row in req.iterrows():
-                requirement_summary.append({
-                    "shift_type": str(row["shift_type"]),
-                    "required_employees_per_day": int(
-                        row["required_employees"]
-                    ),
-                    "start_time": str(row["start_time"]),
-                    "end_time": str(row["end_time"])
-                })
-
-    weekly_positions = daily_positions * 7
-
-    # --------------------------------------
-    # Failure classification
-    # --------------------------------------
-    failure_messages = {
-        "solver_infeasible": (
-            "The mathematical optimizer did not find a feasible solution."
-        ),
-        "weekly_rest_check_failed": (
-            "The optimizer produced an allocation, but the independent "
-            "35-hour weekly-rest check did not pass."
-        ),
-        "execution_error": (
-            "The scheduling process stopped because of an execution error. "
-            "The exact technical error is not shared with Gemini."
-        )
-    }
-
-    failure_description = failure_messages.get(
-        failure_type,
-        "The scheduling process did not produce an approved schedule."
-    )
-
-    safe_outcome = {
-        "feasible": bool(outcome.get("feasible", False)),
-        "assigned_positions": int(
-            outcome.get("assigned_positions", 0)
-        ),
-        "unassigned_positions": int(
-            outcome.get("unassigned_positions", 0)
-        ),
-        "failure_category": failure_type,
-        "failure_description": failure_description
-    }
-
-    # --------------------------------------
-    # Safe anonymized payload
-    # --------------------------------------
-    payload = {
-        "week_start_date": selected_week.isoformat(),
-        "employees": {
-            "total_active_employees": total_employees,
-            "contract_workdays_distribution": contract_distribution,
-            "total_contract_workdays_per_week": total_contract_days
-        },
-        "preferences": {
-            "preferred_shift_counts": preference_counts,
-            "long_shift_consent_counts": consent_counts,
-            "days_off_frequency_by_weekday": days_off_distribution
-        },
-        "shift_requirements": {
-            "employees_required_per_shift_type_per_day": shift_demand,
-            "total_positions_per_day": daily_positions,
-            "total_positions_per_week": weekly_positions,
-            "requirements": requirement_summary
-        },
-        "scheduling_result": safe_outcome
-    }
-
-    prompt = f"""
-You are the AI Planning Assistant of an employee shift-planning system.
-
-Your task is to help a manager understand why a scheduling attempt
-was unsuccessful and identify safe options for further investigation.
-
-SCHEDULING DATA:
-{json.dumps(payload, ensure_ascii=False, indent=2)}
-
-YOUR TASKS:
-
-1. Explain the scheduling result in understandable language.
-2. Identify possible causes supported by the supplied data.
-3. Compare total weekly contract workdays with total weekly shift positions.
-4. Review the aggregated Long Shift consent information.
-5. Review the aggregated shift preferences and requested days off.
-6. Suggest up to three practical scenarios for the manager.
-7. For every scenario, explain:
-   - what the manager could investigate or request;
-   - which information or input may need to be updated;
-   - what must be checked before another scheduling attempt.
-8. Distinguish confirmed facts from possible explanations.
-9. If the supplied data is insufficient to identify the cause,
-   say so clearly and recommend what should be checked next.
-
-IMPORTANT SYSTEM RULES:
-
-- Do not invent facts, employees, staffing shortages or availability.
-- Do not identify individual employees.
-- Do not request or infer personal information.
-- Do not recommend changing or ignoring hard constraints.
-- Never suggest violating contract workdays or mandatory days off.
-- Never suggest assigning a Long Shift without explicit Yes consent.
-- Never suggest violating the 11-hour daily rest or 35-hour weekly rest rules.
-- Employee shift preferences are soft preferences and may be reviewed
-  only through a voluntary, updated employee submission.
-- Mandatory days off are not soft preferences. They must not be silently
-  changed by the manager or by the AI.
-- Do not directly change employee data, preferences, shift requirements,
-  database records or schedules.
-- Do not generate a final employee-to-shift assignment.
-- Do not claim that a proposed scenario is feasible before the
-  mathematical optimizer has checked it.
-- If capacity appears insufficient, recommend that the manager verify
-  staffing requirements and available staffing. Do not assume that
-  hiring or changing contracts is automatically necessary.
-- The manager makes the final decision.
-- Write in professional, clear English.
-- Use headings and bullet points.
-- Keep recommendations practical and concise.
-
-End with a short section titled "Next Manager Decision".
-Return only the manager-facing report.
-"""
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
-    )
-
-    if not response.text:
-        raise RuntimeError("Gemini returned an empty planning report.")
-
-    return response.text
-
-
-# ==========================================
-# 3. DATABASE FUNCTIONS
-# ==========================================
-def load_table(table_name):
-    response = supabase.table(table_name).select("*").execute()
-    return pd.DataFrame(response.data or [])
-
-
-def get_monday():
-    today = date.today()
-    return today - timedelta(days=today.weekday())
-
-
-def save_validation_issues(issues, selected_week):
-    week_label = selected_week.isoformat()
-    current_issue_keys = set()
-    records = []
-
-    for issue in issues:
-        employee_id = issue.get("employee_id")
-        issue_type = issue["issue_type"]
-
-        current_issue_keys.add((
-            str(employee_id) if employee_id is not None else None,
-            str(issue_type)
-        ))
-
-        records.append({
-            "run_id": None,
-            "employee_id": employee_id,
-            "week_start_date": week_label,
-            "work_date": None,
-            "issue_type": issue_type,
-            "severity": issue["severity"],
-            "description": f"Week starting {week_label}. {issue['description']}",
-            "recommended_action": issue.get("recommended_action"),
-            "resolution_status": "Open"
-        })
-
-    if records:
-        supabase.table("validation_issues").upsert(
-            records,
-            on_conflict="week_start_date,employee_id,issue_type"
-        ).execute()
-
-    existing = (
-        supabase.table("validation_issues")
-        .select("issue_id,employee_id,issue_type")
-        .eq("week_start_date", week_label)
-        .eq("resolution_status", "Open")
-        .execute()
-    ).data or []
-
-    resolved_count = 0
-
-    for old in existing:
-        old_key = (
-            str(old["employee_id"])
-            if old.get("employee_id") is not None else None,
-            str(old["issue_type"])
-        )
-
-        if old_key not in current_issue_keys:
-            supabase.table("validation_issues").update(
-                {"resolution_status": "Resolved"}
-            ).eq(
-                "issue_id", old["issue_id"]
-            ).eq(
-                "resolution_status", "Open"
-            ).execute()
-
-            resolved_count += 1
-
-    return {
-        "saved_count": len(records),
-        "resolved_count": resolved_count
-    }
-
-
-# ==========================================
-# 4. VALIDATION ENGINE
-# ==========================================
-def validate_week_data(active_employees, week_preferences):
-    issues = []
-
-    weekdays = [
-        "Monday", "Tuesday", "Wednesday", "Thursday",
-        "Friday", "Saturday", "Sunday"
-    ]
-
-    valid_shifts = ["Morning", "Evening", "Flexible"]
-    valid_consent = ["Yes", "No", "Unknown"]
-
-    submissions = {}
-
-    if not week_preferences.empty:
-        for _, row in week_preferences.iterrows():
-            submissions[row["employee_id"]] = row
-
-    for _, employee in active_employees.iterrows():
-        employee_id = employee["employee_id"]
-        work_days = int(employee["work_days_per_week"])
-        days_off = int(employee["days_off_per_week"])
-
-        if work_days + days_off != 7:
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "INVALID_CONTRACT",
-                "severity": "Critical",
-                "description": "Working days and days off do not add up to 7.",
-                "recommended_action": "Check the employee contract data."
-            })
-
-        if employee_id not in submissions:
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "MISSING_SUBMISSION",
-                "severity": "Critical",
-                "description": "Employee has not submitted weekly preferences.",
-                "recommended_action": "Request the employee to complete the form."
-            })
-            continue
-
-        submission = submissions[employee_id]
-
-        if submission.get("submission_status") != "Received":
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "INVALID_SUBMISSION_STATUS",
-                "severity": "Critical",
-                "description": "Submission is not marked as Received.",
-                "recommended_action": "Check and correct the submission."
-            })
-            continue
-
-        selected_days = submission.get("required_days_off")
-
-        if not isinstance(selected_days, list):
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "INVALID_DAYS_OFF",
-                "severity": "Critical",
-                "description": "Days off are missing or have an invalid format.",
-                "recommended_action": "Ask the employee to submit days off again."
-            })
-        else:
-            if len(selected_days) != days_off:
-                issues.append({
-                    "employee_id": employee_id,
-                    "issue_type": "WRONG_DAYS_OFF_COUNT",
-                    "severity": "Critical",
-                    "description": (
-                        f"Contract requires {days_off} days off, "
-                        f"but employee selected {len(selected_days)}."
-                    ),
-                    "recommended_action": (
-                        "Ask the employee to select the correct number of days."
-                    )
-                })
-
-            if len(selected_days) != len(set(map(str, selected_days))):
-                issues.append({
-                    "employee_id": employee_id,
-                    "issue_type": "DUPLICATE_DAYS",
-                    "severity": "Critical",
-                    "description": "The same day was selected more than once.",
-                    "recommended_action": "Correct the selected days off."
-                })
-
-            invalid_days = [
-                d for d in selected_days if d not in weekdays
-            ]
-
-            if invalid_days:
-                issues.append({
-                    "employee_id": employee_id,
-                    "issue_type": "INVALID_WEEKDAY",
-                    "severity": "Critical",
-                    "description": f"Invalid weekday values: {invalid_days}",
-                    "recommended_action": "Use valid weekday names."
-                })
-
-        if submission.get("preferred_shift") not in valid_shifts:
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "INVALID_SHIFT_PREFERENCE",
-                "severity": "Critical",
-                "description": "Preferred shift is missing or invalid.",
-                "recommended_action": (
-                    "Ask the employee to select a valid shift preference."
-                )
-            })
-
-        consent = submission.get("long_shift_consent")
-
-        if consent not in valid_consent:
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "INVALID_LONG_SHIFT_CONSENT",
-                "severity": "Critical",
-                "description": "Long Shift consent is missing or invalid.",
-                "recommended_action": (
-                    "Ask the employee to clarify their Long Shift consent."
-                )
-            })
-
-        elif consent == "Unknown":
-            issues.append({
-                "employee_id": employee_id,
-                "issue_type": "UNKNOWN_LONG_SHIFT_CONSENT",
-                "severity": "Critical",
-                "description": (
-                    "Long Shift consent is Unknown. "
-                    "Scheduling is blocked until clarified."
-                ),
-                "recommended_action": (
-                    "Ask the employee to select Yes or No."
-                )
-            })
-
-    return issues
-
-
-# ==========================================
-# 5. EMPLOYEE AVAILABILITY FORM
-# ==========================================
-def employee_form():
-    st.title("📅 Employee Availability Form")
-
-    st.write(
-        "Please submit your availability for the upcoming working week."
-    )
-
-    try:
-        employees = load_table("employees")
-
-        if employees.empty:
-            st.warning("No employees found.")
-            return
-
-        active = employees[
-            employees["employment_status"] == "Active"
-        ].copy()
-
-        if active.empty:
-            st.warning("No active employees found.")
-            return
-
-        active = active.sort_values("employee_id")
-
-        employee_id = st.selectbox(
-            "Your Employee ID",
-            active["employee_id"].tolist()
-        )
-
-        employee = active[
-            active["employee_id"] == employee_id
-        ].iloc[0]
-
-        days_off_count = int(employee["days_off_per_week"])
-        work_days = int(employee["work_days_per_week"])
-
-        st.info(
-            f"Your contract: {work_days} working days "
-            f"and {days_off_count} days off per week."
-        )
-
-        st.divider()
-
-        week_start = st.date_input(
-            "Week starting on (Monday)",
-            value=get_monday()
-        )
-
-        weekdays = [
-            "Monday", "Tuesday", "Wednesday", "Thursday",
-            "Friday", "Saturday", "Sunday"
-        ]
-
-        required_days = st.multiselect(
-            f"Choose exactly {days_off_count} days off",
-            weekdays
-        )
-
-        st.caption(
-            f"Selected: {len(required_days)} of {days_off_count} days."
-        )
-
-        preferred_shift = st.selectbox(
-            "Preferred shift",
-            ["Morning", "Evening", "Flexible"]
-        )
-
-        consent = st.selectbox(
-            "Are you willing to work a Long Shift (09:00–21:00)?",
-            ["Unknown", "Yes", "No"]
-        )
-
-        comment = st.text_area("Additional comment (optional)")
-
-        if st.button("Submit availability", type="primary"):
-
-            if week_start.weekday() != 0:
-                st.error("The selected week must start on Monday.")
-
-            elif len(required_days) != days_off_count:
-                st.error(
-                    f"Please select exactly {days_off_count} days off."
-                )
-
-            else:
-                payload = {
-                    "employee_id": employee_id,
-                    "week_start_date": week_start.isoformat(),
-                    "required_days_off": required_days,
-                    "preferred_shift": preferred_shift,
-                    "long_shift_consent": consent,
-                    "submission_status": "Received",
-                    "comment": comment,
-                    "submitted_at": datetime.now(timezone.utc).isoformat()
-                }
-
-                try:
-                    supabase.table("weekly_preferences").upsert(
-                        payload,
-                        on_conflict="employee_id,week_start_date"
-                    ).execute()
-
-                    st.success(
-                        "Your availability was submitted successfully!"
-                    )
-
-                except Exception as e:
-                    st.error("Could not save your submission.")
-                    st.exception(e)
-
-    except Exception as e:
-        st.error("Could not load employee data.")
-        st.exception(e)
-
-
-# ==========================================
-# 6. SCHEDULING ALGORITHM
-# ==========================================
-SHIFT_ORDER = ["Morning", "Evening", "Long"]
-PREFERENCE_PENALTY = 10.0
-MIN_DAILY_REST_HOURS = 11.0
-MIN_WEEKLY_REST_HOURS = 35.0
-
-
-def time_to_minutes(value):
-    """Convert a database time value to minutes after midnight."""
-
-    if value is None:
-        raise ValueError(
-            "A shift requirement is missing a start or end time."
-        )
-
-    if isinstance(value, time):
-        return value.hour * 60 + value.minute
-
-    parts = str(value).split(":")
-    return int(parts[0]) * 60 + int(parts[1])
-
-
-def prepare_shift_requirements(requirements, branches):
-    if requirements.empty:
-        raise ValueError("No active shift requirements were found.")
-
-    req = requirements.copy()
-
-    if "is_active" in req.columns:
-        req = req[req["is_active"] == True].copy()
-
-    if req.empty:
-        raise ValueError("No active shift requirements were found.")
-
-    needed = {
-        "branch_id", "shift_type", "start_time", "end_time",
-        "required_employees", "break_minutes"
-    }
-
-    missing = needed - set(req.columns)
-
-    if missing:
-        raise ValueError(
-            f"shift_requirements is missing columns: {sorted(missing)}"
-        )
-
-    req["required_employees"] = pd.to_numeric(
-        req["required_employees"], errors="coerce"
-    )
-
-    req["break_minutes"] = pd.to_numeric(
-        req["break_minutes"], errors="coerce"
-    )
-
-    if req[["required_employees", "break_minutes"]].isna().any().any():
-        raise ValueError(
-            "Staffing or break values contain empty/non-numeric values."
-        )
-
-    if (req["required_employees"] < 1).any():
-        raise ValueError(
-            "Every active shift requirement must require at least one employee."
-        )
-
-    if not set(req["shift_type"]).issubset(set(SHIFT_ORDER)):
-        raise ValueError(
-            "A shift requirement contains an unsupported shift_type."
-        )
-
-    branch_ids = set(branches["branch_id"].astype(str))
-
-    if not set(req["branch_id"].astype(str)).issubset(branch_ids):
-        raise ValueError(
-            "A shift requirement refers to a branch that was not loaded."
-        )
 
     return req
 
@@ -2352,6 +1482,154 @@ with tab7:
                 )
 
                 st.exception(e)
+
+
+
+
+# ==========================================
+# 9.6. AI DECISION SUPPORT
+# ==========================================
+st.divider()
+st.header("🤖 AI Decision Support")
+
+st.write(
+    "Gemini compares successful schedule runs and helps the manager "
+    "review their operational quality before making an approval decision."
+)
+
+st.caption(
+    "The comparison uses anonymized schedule metrics. Gemini cannot "
+    "change schedules, database records or approval status."
+)
+
+try:
+    decision_runs_response = (
+        supabase.table("schedule_runs")
+        .select("run_id,run_status,manager_approval_status,completed_at")
+        .eq("week_start_date", selected_week.isoformat())
+        .eq("run_status", "Feasible")
+        .order("run_id", desc=True)
+        .limit(5)
+        .execute()
+    )
+
+    decision_runs = decision_runs_response.data or []
+
+except Exception as e:
+    decision_runs = []
+    st.error("Could not load successful runs for decision support.")
+    st.exception(e)
+
+if not decision_runs:
+    st.info(
+        "AI Decision Support becomes available after at least one "
+        "successful schedule has been generated for this week."
+    )
+
+else:
+    st.write(
+        f"Successful schedule candidates available: {len(decision_runs)} "
+        f"(the five most recent runs at most)."
+    )
+
+    decision_summaries = []
+    summary_errors = []
+
+    for run in decision_runs:
+        try:
+            assignment_response = (
+                supabase.table("schedule_assignments")
+                .select("*")
+                .eq("run_id", int(run["run_id"]))
+                .execute()
+            )
+
+            run_assignments = pd.DataFrame(
+                assignment_response.data or []
+            )
+
+            summary = build_schedule_quality_summary(
+                run_id=run["run_id"],
+                assignments=run_assignments,
+                active_employees=active_employees,
+                week_preferences=week_preferences,
+                shift_requirements=shift_requirements
+            )
+
+            summary["manager_approval_status"] = (
+                run.get("manager_approval_status", "Unknown")
+            )
+            decision_summaries.append(summary)
+
+        except Exception as e:
+            summary_errors.append(
+                f"Run {run['run_id']}: {str(e)}"
+            )
+
+    if summary_errors:
+        with st.expander("Candidate data issues"):
+            for message in summary_errors:
+                st.warning(message)
+
+    if decision_summaries:
+        st.subheader("Deterministic Candidate Metrics")
+
+        metrics_df = pd.DataFrame(decision_summaries)
+
+        st.dataframe(
+            metrics_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        if st.button(
+            "Run AI Decision Support",
+            type="primary",
+            key="run_ai_decision_support"
+        ):
+            try:
+                with st.spinner(
+                    "Gemini is comparing the successful schedule candidates..."
+                ):
+                    decision_report = generate_ai_decision_support(
+                        decision_summaries,
+                        selected_week
+                    )
+
+                st.session_state["ai_decision_support"] = {
+                    "week": selected_week.isoformat(),
+                    "report": decision_report,
+                    "error": None
+                }
+
+            except Exception as e:
+                st.session_state["ai_decision_support"] = {
+                    "week": selected_week.isoformat(),
+                    "report": None,
+                    "error": str(e)
+                }
+
+        decision_result = st.session_state.get(
+            "ai_decision_support"
+        )
+
+        if (
+            decision_result
+            and decision_result.get("week") == selected_week.isoformat()
+        ):
+            if decision_result.get("error"):
+                st.error("AI Decision Support failed.")
+                st.code(decision_result["error"])
+
+            elif decision_result.get("report"):
+                st.subheader("AI Manager Decision Report")
+                st.markdown(decision_result["report"])
+
+    else:
+        st.warning(
+            "No schedule candidate could be summarized. "
+            "Review the candidate data issues above."
+        )
 
 
 # ==========================================
