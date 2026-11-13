@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import json
 
 from supabase import create_client
 from google import genai
@@ -9,6 +10,7 @@ from google import genai
 from datetime import date, datetime, timedelta, timezone, time
 from scipy.optimize import milp, LinearConstraint, Bounds
 from scipy.sparse import lil_matrix
+
 
 # ==========================================
 # 1. PAGE SETTINGS
@@ -18,6 +20,7 @@ st.set_page_config(
     page_icon="📅",
     layout="wide"
 )
+
 
 # ==========================================
 # 2. SUPABASE CONNECTION
@@ -63,6 +66,123 @@ def test_gemini_connection():
 
     if not response.text:
         raise RuntimeError("Gemini returned an empty response.")
+
+    return response.text
+
+
+# ==========================================
+# 2.2. AI CONFLICT ANALYSIS
+# ==========================================
+def generate_ai_conflict_analysis(issues, selected_week):
+    """
+    Gemini explains validation findings and proposes manager actions.
+
+    Only anonymized issue information is sent to Gemini.
+    Employee IDs, names and personal comments are excluded.
+    Gemini does not modify the database or schedule.
+    """
+
+    client = init_gemini()
+
+    # Aggregate issues by type, severity and description.
+    grouped_issues = {}
+
+    for issue in issues:
+        issue_type = str(issue.get("issue_type", "UNKNOWN"))
+        severity = str(issue.get("severity", "Unknown"))
+        description = str(issue.get("description", "No description"))
+        action = str(
+            issue.get("recommended_action", "No action specified")
+        )
+
+        key = (issue_type, severity, description, action)
+
+        if key not in grouped_issues:
+            grouped_issues[key] = {
+                "issue_type": issue_type,
+                "severity": severity,
+                "description": description,
+                "recommended_action": action,
+                "count": 0
+            }
+
+        grouped_issues[key]["count"] += 1
+
+    safe_issues = list(grouped_issues.values())
+
+    severity_counts = {
+        "Critical": sum(
+            item["count"]
+            for item in safe_issues
+            if item["severity"] == "Critical"
+        ),
+        "Warning": sum(
+            item["count"]
+            for item in safe_issues
+            if item["severity"] == "Warning"
+        ),
+        "Other": sum(
+            item["count"]
+            for item in safe_issues
+            if item["severity"] not in ("Critical", "Warning")
+        )
+    }
+
+    payload = {
+        "week_start_date": selected_week.isoformat(),
+        "total_issues": len(issues),
+        "severity_counts": severity_counts,
+        "grouped_issues": safe_issues
+    }
+
+    prompt = f"""
+You are the AI Conflict Analysis module of an employee shift-planning system.
+
+Analyze the following validation results for the manager.
+
+VALIDATION DATA:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+YOUR TASKS:
+
+1. Give a short overall assessment of the validation results.
+2. Explain each distinct issue type in understandable language.
+3. Explain how the reported issues affect the readiness of the scheduling process.
+4. Group repeated issues and mention their counts.
+5. Suggest concrete actions the manager should take.
+6. Prioritize Critical issues before Warnings.
+7. If there are no issues, explain that the submitted data passed
+   the current validation checks and that the manager may proceed
+   to the scheduling stage.
+
+IMPORTANT RULES:
+
+- Use only facts contained in the validation data.
+- Do not invent employees, shifts, staffing shortages or conflicts.
+- Do not assume that a shift is understaffed unless the input says so.
+- Clearly distinguish confirmed validation findings from possible
+  operational consequences.
+- Never recommend violating contract workdays, mandatory days off,
+  Long Shift consent, daily rest or weekly rest requirements.
+- Do not create employee assignments or a weekly schedule.
+- Do not change database records or validation results.
+- The manager makes the final decision.
+- Do not ask for personal information.
+- Do not include or infer employee identities.
+- Write the report in clear, professional English.
+- Use headings and bullet points.
+- Keep the report concise and practical.
+
+Return only the manager-facing analysis.
+"""
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt
+    )
+
+    if not response.text:
+        raise RuntimeError("Gemini returned an empty analysis.")
 
     return response.text
 
@@ -549,8 +669,8 @@ def build_solver_constraints(
 
     # Exact mandatory days off.
     weekdays = [
-        "Monday", "Tuesday", "Wednesday", "Thursday",
-        "Friday", "Saturday", "Sunday"
+        "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday", "Sunday"
     ]
 
     for e, (_, emp) in enumerate(employees.iterrows()):
@@ -1378,6 +1498,9 @@ with tab6:
             "issues": validation_issues
         }
 
+        # Clear an old AI report when validation is run again.
+        st.session_state.pop("ai_conflict_analysis", None)
+
         try:
             sync_result = save_validation_issues(
                 validation_issues,
@@ -1474,6 +1597,68 @@ with tab6:
 
         else:
             st.success("No validation issues found.")
+
+        # ----------------------------------
+        # AI CONFLICT ANALYSIS
+        # ----------------------------------
+        st.divider()
+        st.subheader("🤖 AI Conflict Analysis")
+
+        st.write(
+            "Gemini analyzes validation findings, explains their impact "
+            "and suggests actions for the manager."
+        )
+
+        st.caption(
+            "Only anonymized validation information is sent to Gemini. "
+            "The AI does not modify the schedule or database."
+        )
+
+        if st.button(
+            "Run AI Conflict Analysis",
+            type="primary",
+            key="run_ai_conflict_analysis"
+        ):
+
+            try:
+                with st.spinner(
+                    "Gemini is analyzing the validation results..."
+                ):
+
+                    ai_report = generate_ai_conflict_analysis(
+                        issues,
+                        selected_week
+                    )
+
+                st.session_state["ai_conflict_analysis"] = {
+                    "week": selected_week.isoformat(),
+                    "report": ai_report,
+                    "error": None
+                }
+
+            except Exception as e:
+                st.session_state["ai_conflict_analysis"] = {
+                    "week": selected_week.isoformat(),
+                    "report": None,
+                    "error": str(e)
+                }
+
+        ai_result = st.session_state.get(
+            "ai_conflict_analysis"
+        )
+
+        if (
+            ai_result
+            and ai_result.get("week") == selected_week.isoformat()
+        ):
+
+            if ai_result.get("error"):
+                st.error("AI Conflict Analysis failed.")
+                st.code(ai_result["error"])
+
+            elif ai_result.get("report"):
+                st.markdown("### AI Manager Report")
+                st.markdown(ai_result["report"])
 
 
 # ==========================================
