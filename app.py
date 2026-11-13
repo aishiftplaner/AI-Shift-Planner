@@ -451,6 +451,280 @@ Return only the manager-facing report.
     return response.text
 
 
+
+
+# ==========================================
+# 2.4. AI DECISION SUPPORT
+# ==========================================
+def calculate_decision_metrics(
+    run_id,
+    assignments,
+    active_employees,
+    week_preferences,
+    shift_requirements
+):
+    """
+    Calculate transparent, deterministic metrics for one saved schedule.
+    Only aggregated metrics are passed to Gemini; employee identifiers
+    are used locally for matching and are never included in the AI payload.
+    """
+
+    schedule = assignments.copy()
+    employees = active_employees.copy()
+    preferences = week_preferences.copy()
+    requirements = shift_requirements.copy()
+
+    if schedule.empty:
+        raise ValueError(f"Schedule run {run_id} contains no assignments.")
+
+    required_columns = {
+        "employee_id", "work_date", "shift_type",
+        "start_time", "end_time", "break_minutes"
+    }
+    missing_columns = required_columns - set(schedule.columns)
+    if missing_columns:
+        raise ValueError(
+            "Schedule assignments are missing columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    schedule["work_date"] = pd.to_datetime(
+        schedule["work_date"], errors="coerce"
+    ).dt.date
+
+    if schedule["work_date"].isna().any():
+        raise ValueError(
+            f"Schedule run {run_id} contains invalid work dates."
+        )
+
+    schedule["employee_id"] = schedule["employee_id"].astype(str)
+    employees["employee_id"] = employees["employee_id"].astype(str)
+    preferences["employee_id"] = preferences["employee_id"].astype(str)
+
+    if "is_active" in requirements.columns:
+        requirements = requirements[
+            requirements["is_active"] == True
+        ].copy()
+
+    expected_positions = 0
+    if not requirements.empty:
+        expected_positions = int(
+            pd.to_numeric(
+                requirements["required_employees"], errors="coerce"
+            ).fillna(0).sum() * 7
+        )
+
+    assigned_positions = int(len(schedule))
+    coverage_pct = (
+        round(assigned_positions / expected_positions * 100, 1)
+        if expected_positions else None
+    )
+
+    # Calculate net working hours from shift duration minus break time.
+    def minutes_from_value(value):
+        if isinstance(value, time):
+            return value.hour * 60 + value.minute
+        parts = str(value).split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+
+    schedule["net_hours"] = schedule.apply(
+        lambda row: (
+            (
+                (minutes_from_value(row["end_time"])
+                 - minutes_from_value(row["start_time"])) % 1440
+            ) - float(row["break_minutes"] or 0)
+        ) / 60,
+        axis=1
+    )
+
+    hours_by_shift = {}
+    shift_counts = {}
+    for shift in SHIFT_ORDER:
+        subset = schedule[schedule["shift_type"] == shift]
+        shift_counts[shift] = int(len(subset))
+        hours_by_shift[shift] = round(
+            float(subset["net_hours"].sum()), 1
+        )
+
+    total_net_hours = round(float(schedule["net_hours"].sum()), 1)
+
+    # Match each employee's actual assignments with contract and preferences.
+    pref_by_employee = {
+        row["employee_id"]: row
+        for _, row in preferences.iterrows()
+    }
+    employee_by_id = {
+        row["employee_id"]: row
+        for _, row in employees.iterrows()
+    }
+
+    contract_checked = 0
+    contract_compliant = 0
+    days_off_checked = 0
+    days_off_compliant = 0
+    long_consent_violations = 0
+    multiple_long_violations = 0
+    duplicate_day_violations = int(
+        schedule.duplicated(["employee_id", "work_date"]).sum()
+    )
+
+    for employee_id, employee in employee_by_id.items():
+        employee_rows = schedule[
+            schedule["employee_id"] == employee_id
+        ]
+        worked_days = set(employee_rows["work_date"].tolist())
+
+        contract_checked += 1
+        expected_workdays = int(employee["work_days_per_week"])
+        if len(worked_days) == expected_workdays:
+            contract_compliant += 1
+
+        pref = pref_by_employee.get(employee_id)
+        if pref is not None:
+            required_days_off = pref.get("required_days_off")
+            if isinstance(required_days_off, list):
+                days_off_checked += 1
+                weekdays = {
+                    day_name
+                    for day_name in required_days_off
+                }
+                actual_worked_weekdays = {
+                    day.strftime("%A") for day in worked_days
+                }
+                if not (weekdays & actual_worked_weekdays):
+                    days_off_compliant += 1
+
+            long_count = int(
+                (employee_rows["shift_type"] == "Long").sum()
+            )
+            if long_count and pref.get("long_shift_consent") != "Yes":
+                long_consent_violations += long_count
+            if long_count > 1:
+                multiple_long_violations += 1
+
+    # Preference match is measured only where a clear Morning/Evening
+    # preference exists. Flexible and Long assignments are excluded.
+    preference_eligible = 0
+    preference_matches = 0
+    for _, row in schedule.iterrows():
+        pref = pref_by_employee.get(row["employee_id"])
+        if pref is None:
+            continue
+        preferred = pref.get("preferred_shift")
+        actual = row["shift_type"]
+        if preferred in ("Morning", "Evening") and actual in (
+            "Morning", "Evening"
+        ):
+            preference_eligible += 1
+            if actual == preferred:
+                preference_matches += 1
+
+    preference_match_pct = (
+        round(preference_matches / preference_eligible * 100, 1)
+        if preference_eligible else None
+    )
+
+    return {
+        "variant": f"Run {int(run_id)}",
+        "run_id": int(run_id),
+        "assigned_positions": assigned_positions,
+        "expected_positions": expected_positions,
+        "coverage_percent": coverage_pct,
+        "shift_counts": shift_counts,
+        "net_hours_by_shift": hours_by_shift,
+        "total_net_hours": total_net_hours,
+        "contract_compliance": {
+            "employees_meeting_exact_workdays": contract_compliant,
+            "employees_checked": contract_checked
+        },
+        "requested_days_off_compliance": {
+            "employees_respecting_requested_days_off": days_off_compliant,
+            "employees_checked": days_off_checked
+        },
+        "preference_match": {
+            "matched_assignments": preference_matches,
+            "eligible_assignments": preference_eligible,
+            "match_percent": preference_match_pct
+        },
+        "constraint_checks": {
+            "long_without_explicit_consent": long_consent_violations,
+            "employees_with_more_than_one_long_shift": multiple_long_violations,
+            "duplicate_employee_day_assignments": duplicate_day_violations
+        }
+    }
+
+
+def generate_ai_decision_support(metrics, selected_week):
+    """
+    Gemini compares aggregated metrics from up to five feasible schedule runs.
+    It advises the manager but never selects, edits or approves a schedule.
+    """
+
+    client = init_gemini()
+
+    safe_payload = {
+        "week_start_date": selected_week.isoformat(),
+        "number_of_variants": len(metrics),
+        "comparison_scope_note": (
+            "Decision Support does not independently recalculate daily or "
+            "weekly rest. Those checks belong to the scheduling algorithm "
+            "and its post-solve validation."
+        ),
+        "variants": metrics
+    }
+
+    prompt = f"""
+You are the AI Decision Support module of an employee shift-planning system.
+
+Compare the saved feasible schedule variants using only the aggregated
+metrics supplied below.
+
+SCHEDULE COMPARISON DATA:
+{json.dumps(safe_payload, ensure_ascii=False, indent=2)}
+
+YOUR TASKS:
+1. Compare the variants using the same metrics and explain meaningful
+   differences.
+2. Review staffing coverage, net working hours, shift distribution,
+   contract workday compliance and requested days-off compliance.
+3. Review preference-match percentages, noting the eligible assignment
+   count used as the denominator.
+4. Highlight any reported Long Shift consent, repeated Long Shift or
+   duplicate employee/day violations.
+5. Identify the strongest and weakest aspects of each variant.
+6. Recommend which variant appears strongest overall based on the
+   supplied evidence, while explaining the trade-offs.
+7. If the metrics are tied or incomplete, say so and avoid a forced ranking.
+8. End with a short section titled "Next Manager Decision".
+
+IMPORTANT RULES:
+- Use only the supplied metrics. Do not invent facts or causes.
+- A run marked Feasible is not automatically proof of every possible
+  legal or operational requirement.
+- Do not claim that a metric was checked if it is absent.
+- Do not infer employee identities or discuss individual employees.
+- Do not recommend violating contracts, requested days off, consent,
+  daily rest or weekly rest.
+- Do not change, generate, approve or publish a schedule.
+- Do not claim that Gemini is the mathematical optimizer.
+- The manager makes the final decision.
+- Clearly distinguish measured results from recommendations.
+- Write in clear, professional English with headings and concise bullets.
+
+Return only the manager-facing comparison report.
+"""
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt
+    )
+
+    if not response.text:
+        raise RuntimeError("Gemini returned an empty decision-support report.")
+
+    return response.text
+
+
 # ==========================================
 # 3. DATABASE FUNCTIONS
 # ==========================================
@@ -2177,6 +2451,199 @@ with tab7:
             "AI Planning Assistant becomes available after an unsuccessful "
             "scheduling attempt for the selected week."
         )
+
+    # --------------------------------------
+    # AI DECISION SUPPORT
+    # --------------------------------------
+    st.divider()
+    st.subheader("🤖 AI Decision Support")
+
+    st.write(
+        "Compare recent successful schedule variants using transparent "
+        "operational metrics and receive an AI-supported recommendation."
+    )
+
+    st.caption(
+        "Gemini receives aggregated metrics only. It does not modify, "
+        "select, approve or publish any schedule."
+    )
+
+    if st.button(
+        "Run AI Decision Support",
+        type="primary",
+        key="run_ai_decision_support"
+    ):
+        st.session_state.pop("ai_decision_support", None)
+
+        try:
+            recent_runs_response = (
+                supabase.table("schedule_runs")
+                .select("run_id,run_status,manager_approval_status,completed_at")
+                .eq("week_start_date", selected_week.isoformat())
+                .eq("run_status", "Feasible")
+                .order("run_id", desc=True)
+                .limit(5)
+                .execute()
+            )
+
+            recent_runs = recent_runs_response.data or []
+
+            if not recent_runs:
+                st.session_state["ai_decision_support"] = {
+                    "week": selected_week.isoformat(),
+                    "metrics": [],
+                    "report": None,
+                    "error": (
+                        "No successful schedule variants were found "
+                        "for the selected week."
+                    )
+                }
+            else:
+                comparison_metrics = []
+
+                with st.spinner(
+                    "Calculating metrics for recent schedule variants..."
+                ):
+                    for run in recent_runs:
+                        run_id = int(run["run_id"])
+
+                        assignments_response = (
+                            supabase.table("schedule_assignments")
+                            .select("*")
+                            .eq("run_id", run_id)
+                            .execute()
+                        )
+
+                        assignments_df = pd.DataFrame(
+                            assignments_response.data or []
+                        )
+
+                        metrics = calculate_decision_metrics(
+                            run_id=run_id,
+                            assignments=assignments_df,
+                            active_employees=active_employees,
+                            week_preferences=week_preferences,
+                            shift_requirements=shift_requirements
+                        )
+
+                        metrics["manager_approval_status"] = (
+                            run.get("manager_approval_status")
+                            or "Not recorded"
+                        )
+                        comparison_metrics.append(metrics)
+
+                with st.spinner(
+                    "Gemini is comparing the schedule variants..."
+                ):
+                    decision_report = generate_ai_decision_support(
+                        comparison_metrics,
+                        selected_week
+                    )
+
+                st.session_state["ai_decision_support"] = {
+                    "week": selected_week.isoformat(),
+                    "metrics": comparison_metrics,
+                    "report": decision_report,
+                    "error": None
+                }
+
+        except Exception as e:
+            st.session_state["ai_decision_support"] = {
+                "week": selected_week.isoformat(),
+                "metrics": [],
+                "report": None,
+                "error": str(e)
+            }
+
+    decision_result = st.session_state.get("ai_decision_support")
+
+    if (
+        decision_result
+        and decision_result.get("week") == selected_week.isoformat()
+    ):
+        if decision_result.get("error"):
+            st.error("AI Decision Support could not complete the comparison.")
+            st.error(decision_result["error"])
+
+        else:
+            decision_metrics = decision_result.get("metrics", [])
+
+            if decision_metrics:
+                st.markdown("### Schedule Variant Metrics")
+
+                summary_rows = []
+                for item in decision_metrics:
+                    preference = item["preference_match"]
+                    contracts = item["contract_compliance"]
+                    days_off = item["requested_days_off_compliance"]
+                    checks = item["constraint_checks"]
+
+                    summary_rows.append({
+                        "Variant": item["variant"],
+                        "Approval": item["manager_approval_status"],
+                        "Positions": (
+                            f'{item["assigned_positions"]}/'
+                            f'{item["expected_positions"]}'
+                        ),
+                        "Coverage (%)": item["coverage_percent"],
+                        "Preference match (%)": preference["match_percent"],
+                        "Contract days compliant": (
+                            f'{contracts["employees_meeting_exact_workdays"]}/'
+                            f'{contracts["employees_checked"]}'
+                        ),
+                        "Requested days off respected": (
+                            f'{days_off["employees_respecting_requested_days_off"]}/'
+                            f'{days_off["employees_checked"]}'
+                        ),
+                        "Net hours": item["total_net_hours"],
+                        "Long consent violations": (
+                            checks["long_without_explicit_consent"]
+                        ),
+                        "Multiple Long violations": (
+                            checks["employees_with_more_than_one_long_shift"]
+                        ),
+                        "Duplicate employee/day": (
+                            checks["duplicate_employee_day_assignments"]
+                        )
+                    })
+
+                st.dataframe(
+                    pd.DataFrame(summary_rows),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                for item in decision_metrics:
+                    with st.expander(
+                        f'{item["variant"]} — shift distribution and hours'
+                    ):
+                        detail_rows = []
+                        for shift in SHIFT_ORDER:
+                            detail_rows.append({
+                                "Shift": shift,
+                                "Assignments": item["shift_counts"][shift],
+                                "Net hours": item["net_hours_by_shift"][shift]
+                            })
+                        st.dataframe(
+                            pd.DataFrame(detail_rows),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                if decision_result.get("report"):
+                    st.markdown("### AI Manager Recommendation")
+                    st.markdown(decision_result["report"])
+
+                if len(decision_metrics) == 1:
+                    st.info(
+                        "Only one successful variant is available. "
+                        "The report evaluates it, but cannot make a "
+                        "meaningful comparison between alternatives."
+                    )
+            else:
+                st.info(
+                    "No schedule metrics are available for comparison."
+                )
 
     # --------------------------------------
     # Load run history for selected week
