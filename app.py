@@ -41,7 +41,7 @@ except Exception as e:
 # ==========================================
 # 2.1. GEMINI AI CONNECTION
 # ==========================================
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 @st.cache_resource
