@@ -84,7 +84,6 @@ def generate_ai_conflict_analysis(issues, selected_week):
 
     client = init_gemini()
 
-    # Aggregate issues by type, severity and description.
     grouped_issues = {}
 
     for issue in issues:
@@ -147,29 +146,25 @@ YOUR TASKS:
 
 1. Give a short overall assessment of the validation results.
 2. Explain each distinct issue type in understandable language.
-3. Explain how the reported issues affect the readiness of the scheduling process.
+3. Explain how the reported issues affect scheduling readiness.
 4. Group repeated issues and mention their counts.
-5. Suggest concrete actions the manager should take.
+5. Suggest concrete actions for the manager.
 6. Prioritize Critical issues before Warnings.
 7. If there are no issues, explain that the submitted data passed
-   the current validation checks and that the manager may proceed
-   to the scheduling stage.
+   the current validation checks.
 
 IMPORTANT RULES:
 
 - Use only facts contained in the validation data.
-- Do not invent employees, shifts, staffing shortages or conflicts.
-- Do not assume that a shift is understaffed unless the input says so.
-- Clearly distinguish confirmed validation findings from possible
-  operational consequences.
+- Do not invent employees, shifts or staffing shortages.
+- Clearly distinguish confirmed findings from possible consequences.
 - Never recommend violating contract workdays, mandatory days off,
   Long Shift consent, daily rest or weekly rest requirements.
 - Do not create employee assignments or a weekly schedule.
 - Do not change database records or validation results.
 - The manager makes the final decision.
-- Do not ask for personal information.
 - Do not include or infer employee identities.
-- Write the report in clear, professional English.
+- Write in clear, professional English.
 - Use headings and bullet points.
 - Keep the report concise and practical.
 
@@ -183,6 +178,275 @@ Return only the manager-facing analysis.
 
     if not response.text:
         raise RuntimeError("Gemini returned an empty analysis.")
+
+    return response.text
+
+
+# ==========================================
+# 2.3. AI PLANNING ASSISTANT
+# ==========================================
+def generate_ai_planning_assistant(
+    active_employees,
+    week_preferences,
+    shift_requirements,
+    outcome,
+    selected_week,
+    failure_type="solver_infeasible"
+):
+    """
+    Gemini analyzes an unsuccessful scheduling attempt.
+
+    Only aggregated and anonymized information is sent.
+    Gemini proposes scenarios but never changes data or constraints.
+    """
+
+    client = init_gemini()
+
+    employees = active_employees.copy()
+    preferences = week_preferences.copy()
+    requirements = shift_requirements.copy()
+
+    # --------------------------------------
+    # Employee contract summary
+    # --------------------------------------
+    contract_distribution = {}
+
+    if not employees.empty:
+        for contract_days, group in employees.groupby(
+            "work_days_per_week"
+        ):
+            contract_distribution[str(contract_days)] = int(len(group))
+
+    total_employees = int(len(employees))
+
+    total_contract_days = 0
+
+    if not employees.empty:
+        total_contract_days = int(
+            pd.to_numeric(
+                employees["work_days_per_week"],
+                errors="coerce"
+            ).fillna(0).sum()
+        )
+
+    # --------------------------------------
+    # Preference summary
+    # --------------------------------------
+    preference_counts = {
+        "Morning": 0,
+        "Evening": 0,
+        "Flexible": 0,
+        "Unknown": 0
+    }
+
+    consent_counts = {
+        "Yes": 0,
+        "No": 0,
+        "Unknown": 0
+    }
+
+    days_off_distribution = {}
+
+    if not preferences.empty:
+
+        for value, count in preferences[
+            "preferred_shift"
+        ].fillna("Unknown").value_counts().items():
+
+            key = str(value)
+
+            if key in preference_counts:
+                preference_counts[key] += int(count)
+            else:
+                preference_counts["Unknown"] += int(count)
+
+        for value, count in preferences[
+            "long_shift_consent"
+        ].fillna("Unknown").value_counts().items():
+
+            key = str(value)
+
+            if key in consent_counts:
+                consent_counts[key] += int(count)
+            else:
+                consent_counts["Unknown"] += int(count)
+
+        for days in preferences["required_days_off"]:
+            if isinstance(days, list):
+                for day in days:
+                    day_name = str(day)
+                    days_off_distribution[day_name] = (
+                        days_off_distribution.get(day_name, 0) + 1
+                    )
+
+    # --------------------------------------
+    # Shift demand summary
+    # --------------------------------------
+    shift_demand = {
+        "Morning": 0,
+        "Evening": 0,
+        "Long": 0
+    }
+
+    daily_positions = 0
+    requirement_summary = []
+
+    if not requirements.empty:
+
+        req = requirements.copy()
+
+        if "is_active" in req.columns:
+            req = req[req["is_active"] == True].copy()
+
+        if not req.empty:
+
+            for shift in SHIFT_ORDER:
+                values = pd.to_numeric(
+                    req.loc[
+                        req["shift_type"] == shift,
+                        "required_employees"
+                    ],
+                    errors="coerce"
+                ).fillna(0)
+
+                shift_demand[shift] = int(values.sum())
+
+            daily_positions = int(
+                sum(shift_demand.values())
+            )
+
+            for _, row in req.iterrows():
+                requirement_summary.append({
+                    "shift_type": str(row["shift_type"]),
+                    "required_employees_per_day": int(
+                        row["required_employees"]
+                    ),
+                    "start_time": str(row["start_time"]),
+                    "end_time": str(row["end_time"])
+                })
+
+    weekly_positions = daily_positions * 7
+
+    # --------------------------------------
+    # Failure classification
+    # --------------------------------------
+    failure_messages = {
+        "solver_infeasible": (
+            "The mathematical optimizer did not find a feasible solution."
+        ),
+        "weekly_rest_check_failed": (
+            "The optimizer produced an allocation, but the independent "
+            "35-hour weekly-rest check did not pass."
+        ),
+        "execution_error": (
+            "The scheduling process stopped because of an execution error. "
+            "The exact technical error is not shared with Gemini."
+        )
+    }
+
+    failure_description = failure_messages.get(
+        failure_type,
+        "The scheduling process did not produce an approved schedule."
+    )
+
+    safe_outcome = {
+        "feasible": bool(outcome.get("feasible", False)),
+        "assigned_positions": int(
+            outcome.get("assigned_positions", 0)
+        ),
+        "unassigned_positions": int(
+            outcome.get("unassigned_positions", 0)
+        ),
+        "failure_category": failure_type,
+        "failure_description": failure_description
+    }
+
+    # --------------------------------------
+    # Safe anonymized payload
+    # --------------------------------------
+    payload = {
+        "week_start_date": selected_week.isoformat(),
+        "employees": {
+            "total_active_employees": total_employees,
+            "contract_workdays_distribution": contract_distribution,
+            "total_contract_workdays_per_week": total_contract_days
+        },
+        "preferences": {
+            "preferred_shift_counts": preference_counts,
+            "long_shift_consent_counts": consent_counts,
+            "days_off_frequency_by_weekday": days_off_distribution
+        },
+        "shift_requirements": {
+            "employees_required_per_shift_type_per_day": shift_demand,
+            "total_positions_per_day": daily_positions,
+            "total_positions_per_week": weekly_positions,
+            "requirements": requirement_summary
+        },
+        "scheduling_result": safe_outcome
+    }
+
+    prompt = f"""
+You are the AI Planning Assistant of an employee shift-planning system.
+
+Your task is to help a manager understand why a scheduling attempt
+was unsuccessful and identify safe options for further investigation.
+
+SCHEDULING DATA:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+YOUR TASKS:
+
+1. Explain the scheduling result in understandable language.
+2. Identify possible causes supported by the supplied data.
+3. Compare total weekly contract workdays with total weekly shift positions.
+4. Review the aggregated Long Shift consent information.
+5. Review the aggregated shift preferences and requested days off.
+6. Suggest up to three practical scenarios for the manager.
+7. For every scenario, explain:
+   - what the manager could investigate or request;
+   - which information or input may need to be updated;
+   - what must be checked before another scheduling attempt.
+8. Distinguish confirmed facts from possible explanations.
+9. If the supplied data is insufficient to identify the cause,
+   say so clearly and recommend what should be checked next.
+
+IMPORTANT SYSTEM RULES:
+
+- Do not invent facts, employees, staffing shortages or availability.
+- Do not identify individual employees.
+- Do not request or infer personal information.
+- Do not recommend changing or ignoring hard constraints.
+- Never suggest violating contract workdays or mandatory days off.
+- Never suggest assigning a Long Shift without explicit Yes consent.
+- Never suggest violating the 11-hour daily rest or 35-hour weekly rest rules.
+- Employee shift preferences are soft preferences and may be reviewed
+  only through a voluntary, updated employee submission.
+- Mandatory days off are not soft preferences. They must not be silently
+  changed by the manager or by the AI.
+- Do not directly change employee data, preferences, shift requirements,
+  database records or schedules.
+- Do not generate a final employee-to-shift assignment.
+- Do not claim that a proposed scenario is feasible before the
+  mathematical optimizer has checked it.
+- If capacity appears insufficient, recommend that the manager verify
+  staffing requirements and available staffing. Do not assume that
+  hiring or changing contracts is automatically necessary.
+- The manager makes the final decision.
+- Write in professional, clear English.
+- Use headings and bullet points.
+- Keep recommendations practical and concise.
+
+End with a short section titled "Next Manager Decision".
+Return only the manager-facing report.
+"""
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt
+    )
+
+    if not response.text:
+        raise RuntimeError("Gemini returned an empty planning report.")
 
     return response.text
 
@@ -957,6 +1221,7 @@ def run_scheduling_algorithm(
     if not result.success or result.x is None:
         return {
             "feasible": False,
+            "failure_type": "solver_infeasible",
             "message": (
                 result.message
                 or "The optimization solver did not find a feasible schedule."
@@ -987,6 +1252,7 @@ def run_scheduling_algorithm(
     if len(planned_df) != total_demand * 7:
         return {
             "feasible": False,
+            "failure_type": "solver_infeasible",
             "message": (
                 "The solver result did not match the required "
                 "number of weekly positions."
@@ -1087,6 +1353,7 @@ def run_scheduling_algorithm(
     if weekly_rest_problems:
         return {
             "feasible": False,
+            "failure_type": "weekly_rest_check_failed",
             "message": (
                 "The solver found a staffing allocation, but "
                 "the 35-hour weekly-rest check failed: "
@@ -1099,6 +1366,7 @@ def run_scheduling_algorithm(
 
     return {
         "feasible": True,
+        "failure_type": None,
         "message": (
             "Optimal schedule found. All implemented hard constraints passed."
         ),
@@ -1498,7 +1766,6 @@ with tab6:
             "issues": validation_issues
         }
 
-        # Clear an old AI report when validation is run again.
         st.session_state.pop("ai_conflict_analysis", None)
 
         try:
@@ -1696,6 +1963,9 @@ with tab7:
             "for this exact week."
         )
 
+    # --------------------------------------
+    # Generate weekly schedule
+    # --------------------------------------
     if st.button(
         "Generate Weekly Schedule",
         type="primary",
@@ -1703,6 +1973,9 @@ with tab7:
     ):
 
         run_id = None
+
+        # Clear previous Planning Assistant results for this week.
+        st.session_state.pop("ai_planning_assistant", None)
 
         try:
             run_id = create_schedule_run(selected_week)
@@ -1735,6 +2008,13 @@ with tab7:
 
                 st.session_state["last_schedule_run_id"] = int(run_id)
 
+                st.session_state["last_schedule_attempt"] = {
+                    "week": selected_week.isoformat(),
+                    "status": "Feasible",
+                    "failure_type": None,
+                    "outcome": outcome
+                }
+
                 st.success(
                     f"Schedule generated successfully. Run ID: {run_id}"
                 )
@@ -1748,6 +2028,18 @@ with tab7:
                 )
 
                 st.session_state["last_schedule_run_id"] = int(run_id)
+
+                failure_type = outcome.get(
+                    "failure_type",
+                    "solver_infeasible"
+                )
+
+                st.session_state["last_schedule_attempt"] = {
+                    "week": selected_week.isoformat(),
+                    "status": "Infeasible",
+                    "failure_type": failure_type,
+                    "outcome": outcome
+                }
 
                 st.error("No valid schedule was produced.")
 
@@ -1765,6 +2057,25 @@ with tab7:
                 except Exception:
                     pass
 
+            safe_failure_outcome = {
+                "feasible": False,
+                "message": "Scheduling execution failed.",
+                "assigned_positions": 0,
+                "unassigned_positions": 0
+            }
+
+            st.session_state["last_schedule_attempt"] = {
+                "week": selected_week.isoformat(),
+                "status": "Failed",
+                "failure_type": "execution_error",
+                "outcome": safe_failure_outcome
+            }
+
+            st.session_state["last_schedule_message"] = (
+                "Scheduling execution failed. "
+                "Check the technical error before trying again."
+            )
+
             st.error(
                 "Scheduling run failed. "
                 "No schedule was approved or published."
@@ -1777,7 +2088,99 @@ with tab7:
             st.session_state["last_schedule_message"]
         )
 
-    # Load run history for the selected week.
+    # --------------------------------------
+    # AI PLANNING ASSISTANT
+    # --------------------------------------
+    st.divider()
+    st.subheader("🤖 AI Planning Assistant")
+
+    st.write(
+        "If the mathematical optimizer cannot produce a valid schedule, "
+        "Gemini can analyze aggregated planning data and suggest "
+        "alternative actions for the manager."
+    )
+
+    st.caption(
+        "The AI only proposes scenarios. It does not change employee "
+        "preferences, contracts, shift requirements or database records."
+    )
+
+    last_attempt = st.session_state.get(
+        "last_schedule_attempt"
+    )
+
+    planning_available = bool(
+        last_attempt
+        and last_attempt.get("week") == selected_week.isoformat()
+        and last_attempt.get("status") in ("Infeasible", "Failed")
+    )
+
+    if planning_available:
+
+        st.warning(
+            "The latest scheduling attempt for this week was unsuccessful. "
+            "You can ask the AI Planning Assistant to analyze the situation."
+        )
+
+        if st.button(
+            "Run AI Planning Assistant",
+            type="primary",
+            key="run_ai_planning_assistant"
+        ):
+
+            try:
+                with st.spinner(
+                    "Gemini is analyzing the planning situation..."
+                ):
+
+                    planning_report = generate_ai_planning_assistant(
+                        active_employees=active_employees,
+                        week_preferences=week_preferences,
+                        shift_requirements=shift_requirements,
+                        outcome=last_attempt["outcome"],
+                        selected_week=selected_week,
+                        failure_type=last_attempt["failure_type"]
+                    )
+
+                st.session_state["ai_planning_assistant"] = {
+                    "week": selected_week.isoformat(),
+                    "report": planning_report,
+                    "error": None
+                }
+
+            except Exception as e:
+                st.session_state["ai_planning_assistant"] = {
+                    "week": selected_week.isoformat(),
+                    "report": None,
+                    "error": str(e)
+                }
+
+        planning_result = st.session_state.get(
+            "ai_planning_assistant"
+        )
+
+        if (
+            planning_result
+            and planning_result.get("week") == selected_week.isoformat()
+        ):
+
+            if planning_result.get("error"):
+                st.error("AI Planning Assistant failed.")
+                st.code(planning_result["error"])
+
+            elif planning_result.get("report"):
+                st.markdown("### AI Planning Recommendations")
+                st.markdown(planning_result["report"])
+
+    else:
+        st.info(
+            "AI Planning Assistant becomes available after an unsuccessful "
+            "scheduling attempt for the selected week."
+        )
+
+    # --------------------------------------
+    # Load run history for selected week
+    # --------------------------------------
     try:
         runs_response = (
             supabase.table("schedule_runs")
