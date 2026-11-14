@@ -2325,7 +2325,7 @@ with dashboard_tab:
             branches,
             use_container_width=True,
             hide_index=True
-        , theme="light")
+        )
 
         st.subheader("Požadavky na směny" if is_czech else "Shift Requirements")
 
@@ -2333,7 +2333,7 @@ with dashboard_tab:
             shift_requirements,
             use_container_width=True,
             hide_index=True
-        , theme="light")
+        )
 
         st.subheader("Firemní pravidla" if is_czech else "Company Rules")
 
@@ -2341,7 +2341,7 @@ with dashboard_tab:
             company_rules,
             use_container_width=True,
             hide_index=True
-        , theme="light")
+        )
 
 with employees_tab:
     st.subheader("Zaměstnanci a dostupnost" if is_czech else "Employees & Availability")
@@ -2352,7 +2352,7 @@ with employees_tab:
         employees,
         use_container_width=True,
         hide_index=True
-    , theme="light")
+    )
 
     st.subheader("Týdenní preference zaměstnanců" if is_czech else "Weekly Employee Preferences")
 
@@ -2373,7 +2373,7 @@ with employees_tab:
         ],
         use_container_width=True,
         hide_index=True
-    , theme="light")
+    )
 
     st.divider()
 
@@ -2399,7 +2399,7 @@ with employees_tab:
             ],
             use_container_width=True,
             hide_index=True
-        , theme="light")
+        )
 
 with schedule_tab:
     st.subheader("Správa směn" if is_czech else "Schedule Management")
@@ -2518,7 +2518,7 @@ with schedule_tab:
                 pd.DataFrame(issues),
                 use_container_width=True,
                 hide_index=True
-            , theme="light")
+            )
 
         else:
             st.success("Nebyly nalezeny žádné problémy." if is_czech else "No validation issues found.")
@@ -2713,7 +2713,7 @@ with schedule_tab:
             runs,
             use_container_width=True,
             hide_index=True
-        , theme="light")
+        )
 
         feasible_runs = runs[
             runs["run_status"] == "Feasible"
@@ -2764,7 +2764,7 @@ with schedule_tab:
                         ],
                         use_container_width=True,
                         hide_index=True
-                    , theme="light")
+                    )
 
                     selected_run = feasible_runs[
                         feasible_runs["run_id"].astype(int)
@@ -3185,7 +3185,7 @@ with ai_tab:
                     pd.DataFrame(summary_rows),
                     use_container_width=True,
                     hide_index=True
-                , theme="light")
+                )
 
                 assignment_comparisons = decision_result.get(
                     "assignment_comparisons", []
@@ -3238,7 +3238,7 @@ with ai_tab:
                         pd.DataFrame(assignment_rows),
                         use_container_width=True,
                         hide_index=True
-                    , theme="light")
+                    )
                 elif len(decision_metrics) == 1:
                     st.info(
                         "Only one successful variant is available. "
@@ -3261,7 +3261,7 @@ with ai_tab:
                             pd.DataFrame(detail_rows),
                             use_container_width=True,
                             hide_index=True
-                        , theme="light")
+                        )
 
                 if decision_result.get("report"):
                     st.markdown("### AI Manager Recommendation")
