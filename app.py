@@ -1519,6 +1519,88 @@ def calculate_weekly_rest(assignments, employees):
     return problems
 
 
+def find_long_shift_consent_violations(assignments, preferences):
+    """Return assignments that violate the explicit Long Shift consent rule.
+
+    This is a deterministic check over generated assignments. It does not
+    modify data or call Gemini.
+    """
+    required_assignment_columns = {"employee_id", "shift_type"}
+    required_preference_columns = {"employee_id", "long_shift_consent"}
+
+    missing_assignments = required_assignment_columns - set(assignments.columns)
+    missing_preferences = required_preference_columns - set(preferences.columns)
+
+    if missing_assignments:
+        raise ValueError(
+            "Assignments are missing columns: "
+            + ", ".join(sorted(missing_assignments))
+        )
+    if missing_preferences:
+        raise ValueError(
+            "Preferences are missing columns: "
+            + ", ".join(sorted(missing_preferences))
+        )
+
+    consent_by_employee = (
+        preferences.drop_duplicates("employee_id", keep="last")
+        .set_index("employee_id")["long_shift_consent"]
+        .to_dict()
+    )
+
+    violations = []
+    long_assignments = assignments[
+        assignments["shift_type"].astype(str).str.strip().eq("Long")
+    ]
+
+    for _, assignment in long_assignments.iterrows():
+        employee_id = assignment["employee_id"]
+        consent = consent_by_employee.get(employee_id)
+
+        if consent != "Yes":
+            violations.append({
+                "employee_id": employee_id,
+                "long_shift_consent": consent,
+                "work_date": assignment.get("work_date"),
+                "branch_id": assignment.get("branch_id"),
+                "shift_type": "Long",
+                "reason": (
+                    "Long Shift requires explicit Yes consent; "
+                    f"received {consent!r}."
+                )
+            })
+
+    return violations
+
+
+def run_long_shift_consent_self_test():
+    """Run isolated positive/negative tests without touching Supabase."""
+    test_assignments = pd.DataFrame([
+        {"employee_id": "TEST_E01", "shift_type": "Long", "work_date": "2026-11-16"}
+    ])
+
+    no_consent = pd.DataFrame([
+        {"employee_id": "TEST_E01", "long_shift_consent": "No"}
+    ])
+    yes_consent = pd.DataFrame([
+        {"employee_id": "TEST_E01", "long_shift_consent": "Yes"}
+    ])
+
+    no_result = find_long_shift_consent_violations(
+        test_assignments, no_consent
+    )
+    yes_result = find_long_shift_consent_violations(
+        test_assignments, yes_consent
+    )
+
+    return {
+        "no_consent_case_detected": len(no_result) == 1,
+        "yes_consent_case_allowed": len(yes_result) == 0,
+        "no_consent_details": no_result,
+        "yes_consent_details": yes_result
+    }
+
+
 def run_scheduling_algorithm(
     active_employees,
     week_preferences,
@@ -1754,13 +1836,15 @@ def run_scheduling_algorithm(
                 f"Post-check failed: incorrect number of workdays for {employee_id}."
             )
 
-        if (
-            (group["shift_type"] == "Long").any()
-            and pref["long_shift_consent"] != "Yes"
-        ):
-            raise ValueError(
-                f"Post-check failed: Long Shift without consent for {employee_id}."
-            )
+    long_consent_violations = find_long_shift_consent_violations(
+        assignments, preferences
+    )
+    if long_consent_violations:
+        first_violation = long_consent_violations[0]
+        raise ValueError(
+            "Post-check failed: Long Shift without explicit Yes consent "
+            f"for {first_violation['employee_id']}."
+        )
 
     weekly_rest_problems = calculate_weekly_rest(
         assignments, employees
