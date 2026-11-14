@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
+import unicodedata
 
 from supabase import create_client
 from google import genai
@@ -676,8 +677,9 @@ def calculate_decision_metrics(
             if isinstance(required_days_off, list):
                 days_off_checked += 1
                 weekdays = {
-                    day_name
+                    normalize_weekday(day_name)
                     for day_name in required_days_off
+                    if normalize_weekday(day_name) is not None
                 }
                 actual_worked_weekdays = {
                     day.strftime("%A") for day in worked_days
@@ -1039,14 +1041,40 @@ def save_validation_issues(issues, selected_week):
 
 
 # ==========================================
+# WEEKDAY NORMALIZATION
+# ==========================================
+WEEKDAY_ALIASES = {
+    "monday": "Monday", "pondeli": "Monday",
+    "tuesday": "Tuesday", "utery": "Tuesday",
+    "wednesday": "Wednesday", "streda": "Wednesday",
+    "thursday": "Thursday", "ctvrtek": "Thursday",
+    "friday": "Friday", "patek": "Friday",
+    "saturday": "Saturday", "sobota": "Saturday",
+    "sunday": "Sunday", "nedele": "Sunday",
+}
+
+def normalize_weekday(value):
+    """Return a canonical English weekday for stored English/Czech values."""
+    if value is None:
+        return None
+    normalized = unicodedata.normalize("NFKD", str(value).strip().casefold())
+    normalized = "".join(
+        character for character in normalized
+        if not unicodedata.combining(character)
+    )
+    return WEEKDAY_ALIASES.get(normalized)
+
+
+# ==========================================
 # 4. VALIDATION ENGINE
 # ==========================================
 def validate_week_data(active_employees, week_preferences):
     issues = []
 
+    # Database values are stored in a canonical language-independent format.
     weekdays = [
-        ("Pondělí" if is_czech else "Monday"), ("Úterý" if is_czech else "Tuesday"), ("Středa" if is_czech else "Wednesday"), ("Čtvrtek" if is_czech else "Thursday"),
-        ("Pátek" if is_czech else "Friday"), ("Sobota" if is_czech else "Saturday"), ("Neděle" if is_czech else "Sunday")
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday"
     ]
 
     valid_shifts = ["Morning", "Evening", "Flexible"]
@@ -1128,8 +1156,10 @@ def validate_week_data(active_employees, week_preferences):
                     "recommended_action": "Correct the selected days off."
                 })
 
+            normalized_days = [normalize_weekday(day) for day in selected_days]
             invalid_days = [
-                d for d in selected_days if d not in weekdays
+                day for day, normalized in zip(selected_days, normalized_days)
+                if normalized not in weekdays
             ]
 
             if invalid_days:
@@ -1498,13 +1528,16 @@ def build_solver_constraints(
 
     # Exact mandatory days off.
     weekdays = [
-        "Monday", "Tuesday", "Wednesday",
-        "Thursday", ("Pátek" if cz else "Friday"), ("Sobota" if cz else "Saturday"), ("Neděle" if cz else "Sunday")
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday"
     ]
 
     for e, (_, emp) in enumerate(employees.iterrows()):
         pref = pref_by_id[emp["employee_id"]]
-        days_off = pref["required_days_off"]
+        days_off = {
+            normalize_weekday(day_name)
+            for day_name in pref["required_days_off"]
+        }
 
         for d, day_name in enumerate(weekdays):
             if day_name in days_off:
