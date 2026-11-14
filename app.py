@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
+import io
 import unicodedata
 
 from supabase import create_client
@@ -256,9 +257,10 @@ IMPORTANT RULES:
 - Do not change database records or validation results.
 - The manager makes the final decision.
 - Do not include or infer employee identities.
-- Write in clear, professional English.
-- Use headings and bullet points.
-- Keep the report concise and practical.
+- Piš výhradně česky, profesionálně a stručně.
+- Používej krátké nadpisy a odrážky.
+- Odděluj ověřená fakta od hypotéz.
+- Závažnost uveď pouze nenápadně jako doplňující informaci.
 
 Return only the manager-facing analysis.
 """
@@ -454,6 +456,63 @@ def generate_ai_planning_assistant(
     }
 
     # --------------------------------------
+    # Deterministic evidence-based diagnostics
+    # --------------------------------------
+    weekday_keys = [
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday"
+    ]
+    daily_capacity_checks = []
+    pref_by_employee = {}
+    if not preferences.empty and "employee_id" in preferences.columns:
+        pref_by_employee = {
+            row["employee_id"]: row
+            for _, row in preferences.iterrows()
+        }
+
+    daily_required_positions = daily_positions
+    for day_name in weekday_keys:
+        unavailable_ids = set()
+        for employee_id, pref in pref_by_employee.items():
+            days_off = pref.get("required_days_off")
+            if isinstance(days_off, list):
+                normalized = [normalize_weekday(day) for day in days_off]
+                if day_name in normalized:
+                    unavailable_ids.add(employee_id)
+
+        available_upper_bound = max(0, total_employees - len(unavailable_ids))
+        daily_capacity_checks.append({
+            "weekday": day_name,
+            "employees_with_no_requested_day_off": available_upper_bound,
+            "required_positions": daily_required_positions,
+            "simple_daily_headcount_gap": max(
+                0, daily_required_positions - available_upper_bound
+            )
+        })
+
+    long_required_per_day = shift_demand.get("Long", 0)
+    explicit_yes_count = consent_counts.get("Yes", 0)
+    evidence_diagnostics = {
+        "weekly_contract_days_vs_weekly_positions": {
+            "contract_workdays": total_contract_days,
+            "required_weekly_positions": weekly_positions,
+            "difference_contract_days_minus_positions": (
+                total_contract_days - weekly_positions
+            ),
+            "is_exact_match": total_contract_days == weekly_positions
+        },
+        "daily_headcount_upper_bound_checks": daily_capacity_checks,
+        "long_shift_consent": {
+            "employees_with_explicit_yes": explicit_yes_count,
+            "long_positions_required_per_day": long_required_per_day,
+            "note": (
+                "This is an aggregate comparison only; it does not prove "
+                "that consented employees are available on each required date."
+            )
+        }
+    }
+
+    # --------------------------------------
     # Safe anonymized payload
     # --------------------------------------
     payload = {
@@ -474,7 +533,8 @@ def generate_ai_planning_assistant(
             "total_positions_per_week": weekly_positions,
             "requirements": requirement_summary
         },
-        "scheduling_result": safe_outcome
+        "scheduling_result": safe_outcome,
+        "deterministic_diagnostics": evidence_diagnostics
     }
 
     prompt = f"""
@@ -489,12 +549,19 @@ SCHEDULING DATA:
 YOUR TASKS:
 
 1. Explain the scheduling result in understandable language.
-2. Identify possible causes supported by the supplied data.
-3. Compare total weekly contract workdays with total weekly shift positions.
-4. Review the aggregated Long Shift consent information.
+2. First review the section "deterministic_diagnostics". Treat its calculated values as verified facts.
+3. Identify concrete capacity mismatches by weekday only when the supplied calculations show a positive gap.
+4. Compare total weekly contract workdays with total weekly shift positions.
+5. Review the aggregated Long Shift consent information and its stated limitation.
 5. Review the aggregated shift preferences and requested days off.
 6. Suggest up to three practical scenarios for the manager.
-7. For every scenario, explain:
+7. Use a compact manager report structure:
+   - Stav (Připraveno / Vyžaduje pozornost / Blokováno)
+   - 3 key facts or metrics, only when supported by data
+   - Stručný závěr (2–3 sentences)
+   - Doporučený krok manažera
+   - Podrobnosti with evidence labels (Potvrzený fakt / Hypotéza / Nedostatek údajů).
+8. For every scenario, explain:
    - what the manager could investigate or request;
    - which information or input may need to be updated;
    - what must be checked before another scheduling attempt.
@@ -505,6 +572,9 @@ YOUR TASKS:
 IMPORTANT SYSTEM RULES:
 
 - Do not invent facts, employees, staffing shortages or availability.
+- A positive daily headcount gap in deterministic diagnostics is a confirmed aggregate shortage for that day.
+- A zero gap is not proof of feasibility: daily rest, weekly rest, shift compatibility and exact workday allocation may still make the model infeasible.
+- Do not claim an exact mathematical cause unless the supplied diagnostic evidence proves it.
 - Do not identify individual employees.
 - Do not request or infer personal information.
 - Do not recommend changing or ignoring hard constraints.
@@ -524,12 +594,15 @@ IMPORTANT SYSTEM RULES:
   staffing requirements and available staffing. Do not assume that
   hiring or changing contracts is automatically necessary.
 - The manager makes the final decision.
-- Write in professional, clear English.
-- Use headings and bullet points.
-- Keep recommendations practical and concise.
+- Piš výhradně česky, profesionálně a stručně.
+- Používej krátké nadpisy a odrážky.
+- U každého závěru označ, zda jde o potvrzený fakt, nebo hypotézu.
+- Pokud data neumožňují určit přesnou příčinu, výslovně to přiznej.
+- Nevydávej možné příčiny za prokázané.
+- Závažnost uveď nenápadně, nikoli jako hlavní sdělení.
 
-End with a short section titled "Next Manager Decision".
-Return only the manager-facing report.
+Zakonči krátkou částí „Další krok manažera“.
+Vrať pouze zprávu pro manažera v češtině.
 """
 
     response = client.models.generate_content(
@@ -912,6 +985,10 @@ DATA PRO POROVNÁNÍ ROZVRHŮ:
 {json.dumps(safe_payload, ensure_ascii=False, indent=2)}
 
 ÚKOLY:
+0. Začni stručným stavem (Vyžaduje pozornost / Doporučení připraveno), uveď
+   3–4 nejdůležitější ověřené ukazatele, krátký závěr (2–3 věty),
+   doporučený krok manažera a podrobnosti v rozbalitelné logice textu.
+   Závažnost uveď pouze nenápadně.
 1. Porovnej varianty pomocí stejných ukazatelů a vysvětli podstatné rozdíly.
 2. Zhodnoť pokrytí směn, čistý počet pracovních hodin, rozdělení směn,
    dodržení smluvního počtu pracovních dnů a požadovaných dnů volna.
@@ -1282,12 +1359,32 @@ def employee_form():
             time(12, 0),
             tzinfo=prague_tz
         )
+        approved_for_form_week = False
+        try:
+            approved_response = (
+                supabase.table("schedule_runs")
+                .select("run_id")
+                .eq("week_start_date", week_start.isoformat())
+                .eq("manager_approval_status", "Approved")
+                .limit(1)
+                .execute()
+            )
+            approved_for_form_week = bool(approved_response.data)
+        except Exception:
+            # Fail closed: do not allow edits when approval state is unknown.
+            approved_for_form_week = True
+
         form_locked = (
             week_start < current_monday
             or now_local >= submission_deadline
+            or approved_for_form_week
         )
 
-        if form_locked:
+        if approved_for_form_week:
+            st.warning(
+                "Tento týden již byl manažerem schválen. Odevzdání je uzamčeno."
+            )
+        elif form_locked:
             st.warning(
                 "Termín odevzdání uplynul. Změny pro tento týden jsou uzamčeny."
                 if cz else
@@ -1468,8 +1565,48 @@ def prepare_shift_requirements(requirements, branches):
     return req
 
 
+def load_long_shift_history(selected_week):
+    """Count Long assignments per employee in the four preceding weeks."""
+    history_start = selected_week - timedelta(days=28)
+    runs_response = (
+        supabase.table("schedule_runs")
+        .select("run_id,week_start_date,run_status")
+        .eq("run_status", "Feasible")
+        .lt("week_start_date", selected_week.isoformat())
+        .gte("week_start_date", history_start.isoformat())
+        .order("run_id", desc=True)
+        .execute()
+    )
+    runs = runs_response.data or []
+    latest_by_week = {}
+    for run in runs:
+        week = str(run.get("week_start_date", ""))[:10]
+        if week and week not in latest_by_week:
+            latest_by_week[week] = int(run["run_id"])
+
+    counts = {}
+    last_dates = {}
+    for run_id in latest_by_week.values():
+        response = (
+            supabase.table("schedule_assignments")
+            .select("employee_id,work_date,shift_type")
+            .eq("run_id", run_id)
+            .eq("shift_type", "Long")
+            .execute()
+        )
+        for item in response.data or []:
+            employee_id = item["employee_id"]
+            work_date = date.fromisoformat(str(item["work_date"])[:10])
+            counts[employee_id] = counts.get(employee_id, 0) + 1
+            if employee_id not in last_dates or work_date > last_dates[employee_id]:
+                last_dates[employee_id] = work_date
+
+    return {"counts": counts, "last_dates": last_dates}
+
+
 def build_solver_constraints(
-    employees, preferences, demand, shift_times
+    employees, preferences, demand, shift_times,
+    long_shift_history=None, selected_week=None
 ):
     n_emp = len(employees)
     n_days = 7
@@ -1610,8 +1747,12 @@ def build_solver_constraints(
     upper_bounds = np.ones(n_vars)
     integrality = np.ones(n_vars, dtype=int)
 
-    # Preference deviations are soft constraints.
+    # Preference deviations are soft constraints. Long shifts additionally
+    # receive a fairness penalty based on the previous four weeks.
     objective = np.zeros(n_vars)
+    history = long_shift_history or {}
+    long_counts = history.get("counts", {})
+    last_long_dates = history.get("last_dates", {})
 
     for e, (_, emp) in enumerate(employees.iterrows()):
         pref = pref_by_id[emp["employee_id"]]["preferred_shift"]
@@ -1620,7 +1761,16 @@ def build_solver_constraints(
             for s, shift in enumerate(SHIFT_ORDER):
 
                 if shift == "Long":
-                    objective[idx(e, d, s)] = 0.25
+                    employee_id = emp["employee_id"]
+                    prior_count = int(long_counts.get(employee_id, 0))
+                    last_date = last_long_dates.get(employee_id)
+                    recency_penalty = 0.0
+                    if last_date is not None and selected_week is not None:
+                        days_since_last = max(0, (selected_week - last_date).days)
+                        recency_penalty = 20.0 / (days_since_last + 1)
+                    objective[idx(e, d, s)] = (
+                        0.25 + prior_count * 2.0 + recency_penalty
+                    )
 
                 elif (
                     pref in ("Morning", "Evening")
@@ -1788,7 +1938,8 @@ def run_scheduling_algorithm(
     week_preferences,
     shift_requirements,
     branches,
-    selected_week
+    selected_week,
+    long_shift_history=None
 ):
     employees = (
         active_employees
@@ -1886,7 +2037,9 @@ def run_scheduling_algorithm(
             employees,
             preferences,
             demand,
-            shift_times
+            shift_times,
+            long_shift_history=long_shift_history,
+            selected_week=selected_week
         )
     )
 
@@ -2115,6 +2268,21 @@ def persist_schedule(run_id, assignments):
 
 
 def approve_or_reject_run(run_id, decision, comment):
+    run_response = (
+        supabase.table("schedule_runs")
+        .select("run_id,week_start_date,manager_approval_status")
+        .eq("run_id", int(run_id))
+        .limit(1)
+        .execute()
+    )
+    run_rows = run_response.data or []
+    if not run_rows:
+        raise ValueError("Vybraný běh nebyl nalezen.")
+    run_week = date.fromisoformat(str(run_rows[0]["week_start_date"])[:10])
+    existing_approved = get_approved_run_for_week(run_week)
+    if decision == "Approved" and existing_approved and int(existing_approved["run_id"]) != int(run_id):
+        raise ValueError("Pro tento týden již bylo schváleno jiné rozvržení.")
+
     supabase.table("manager_approvals").insert({
         "run_id": int(run_id),
         "approval_status": decision,
@@ -2125,6 +2293,138 @@ def approve_or_reject_run(run_id, decision, comment):
     supabase.table("schedule_runs").update({
         "manager_approval_status": decision
     }).eq("run_id", int(run_id)).execute()
+
+
+
+def get_approved_run_for_week(week):
+    """Return the approved run for a week, if one exists."""
+    response = (
+        supabase.table("schedule_runs")
+        .select("run_id,manager_approval_status")
+        .eq("week_start_date", week.isoformat())
+        .eq("manager_approval_status", "Approved")
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    return rows[0] if rows else None
+
+
+def render_schedule_grid(assignments, branches_df):
+    """Render a compact weekly matrix: days/shift rows by branch columns."""
+    if assignments is None or assignments.empty:
+        st.info("Pro toto období není k dispozici žádné přiřazení.")
+        return
+
+    data = assignments.copy()
+    data["work_date"] = pd.to_datetime(data["work_date"], errors="coerce").dt.date
+    data = data.dropna(subset=["work_date"])
+
+    branch_ids = sorted(data["branch_id"].dropna().unique().tolist(), key=lambda x: str(x))
+    branch_labels = {}
+    if branches_df is not None and not branches_df.empty:
+        id_col = "branch_id" if "branch_id" in branches_df.columns else None
+        name_col = next((c for c in ("branch_name", "name", "branch") if c in branches_df.columns), None)
+        if id_col and name_col:
+            branch_labels = {
+                row[id_col]: f"{row[id_col]} · {row[name_col]}"
+                for _, row in branches_df.iterrows()
+            }
+
+    weekday_names = [
+        "Pondělí", "Úterý", "Středa", "Čtvrtek",
+        "Pátek", "Sobota", "Neděle"
+    ]
+    shift_names = {
+        "Morning": "Ranní",
+        "Evening": "Večerní",
+        "Long": "Dlouhá"
+    }
+
+    rows = []
+    for day_offset in range(7):
+        day = data["work_date"].min() + timedelta(days=day_offset)
+        day_rows = data[data["work_date"] == day]
+        for shift in ("Morning", "Evening", "Long"):
+            row = {
+                "Den": f"{weekday_names[day.weekday()]} {day:%d.%m.}",
+                "Směna": shift_names[shift]
+            }
+            for branch_id in branch_ids:
+                cell = day_rows[
+                    (day_rows["branch_id"] == branch_id)
+                    & (day_rows["shift_type"] == shift)
+                ]
+                entries = []
+                for _, assignment in cell.iterrows():
+                    entries.append(
+                        f'{assignment["employee_id"]} '
+                        f'({str(assignment["start_time"])[:5]}–{str(assignment["end_time"])[:5]})'
+                    )
+                row[branch_labels.get(branch_id, str(branch_id))] = "\n".join(entries) if entries else "—"
+            rows.append(row)
+
+    grid = pd.DataFrame(rows)
+    st.dataframe(
+        grid,
+        use_container_width=True,
+        hide_index=True,
+        height=min(900, 110 + len(grid) * 43),
+        column_config={
+            "Den": st.column_config.TextColumn("Den", width="small"),
+            "Směna": st.column_config.TextColumn("Směna", width="small")
+        }
+    )
+
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        grid.to_excel(writer, index=False, sheet_name="Týdenní rozpis")
+        worksheet = writer.sheets["Týdenní rozpis"]
+        from openpyxl.styles import Alignment, Border, Side, Font
+        thin = Side(style="thin", color="000000")
+        for row in worksheet.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True
+                )
+                cell.border = Border(
+                    left=thin, right=thin, top=thin, bottom=thin
+                )
+                cell.font = Font(name="Arial", size=10, bold=(cell.row == 1))
+        worksheet.freeze_panes = "C2"
+        worksheet.column_dimensions["A"].width = 18
+        worksheet.column_dimensions["B"].width = 14
+        for col_idx in range(3, len(grid.columns) + 1):
+            worksheet.column_dimensions[
+                worksheet.cell(row=1, column=col_idx).column_letter
+            ].width = 22
+        for row_idx in range(2, len(grid) + 2):
+            worksheet.row_dimensions[row_idx].height = 34
+
+    st.download_button(
+        "Stáhnout rozpis v Excelu",
+        data=excel_buffer.getvalue(),
+        file_name=f"rozpis_{data['work_date'].min().isoformat()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    with st.expander("Souhrn odpracovaných hodin zaměstnanců"):
+        summary = data.copy()
+        def net_hours(row):
+            start = time_to_minutes(row["start_time"])
+            end = time_to_minutes(row["end_time"])
+            if end <= start:
+                end += 24 * 60
+            return max(0, end - start - int(row.get("break_minutes", 0))) / 60
+        summary["Čisté hodiny"] = summary.apply(net_hours, axis=1)
+        hours = (
+            summary.groupby("employee_id", as_index=False)["Čisté hodiny"]
+            .sum()
+            .sort_values("employee_id")
+        )
+        hours["Čisté hodiny"] = hours["Čisté hodiny"].round(2)
+        st.dataframe(hours, use_container_width=True, hide_index=True)
+
 
 # ==========================================
 # 8. PAGE ROUTING
@@ -2147,7 +2447,7 @@ apply_light_theme()
 # The manager interface is intentionally Czech-only.
 is_czech = True
 
-tab_labels = ["Přehled", "Zaměstnanci a dostupnost", "Správa směn", "AI přehledy a reporty"]
+tab_labels = ["Přehled", "Zaměstnanci a dostupnost", "Správa směn"]
 
 # ==========================================
 # 9.1. GEMINI API CONNECTION TEST
@@ -2201,6 +2501,15 @@ if selected_week.weekday() != 0:
     st.warning("Vyberte prosím pondělí.")
     st.stop()
 
+prague_tz = ZoneInfo("Europe/Prague")
+now_prague = datetime.now(prague_tz)
+current_monday = now_prague.date() - timedelta(days=now_prague.weekday())
+submission_deadline = datetime.combine(
+    selected_week - timedelta(days=3), time(12, 0), tzinfo=prague_tz
+)
+week_is_past = selected_week < current_monday
+week_is_locked_by_deadline = now_prague >= submission_deadline
+
 
 # ==========================================
 # 9.3. LOAD WEEKLY PREFERENCES
@@ -2209,7 +2518,7 @@ try:
     preferences = load_table("weekly_preferences")
 
 except Exception as e:
-    st.error("Could not load weekly preferences.")
+    st.error("Nepodařilo se načíst týdenní preference.")
     st.exception(e)
     st.stop()
 
@@ -2296,7 +2605,15 @@ received_count = int(
 
 missing_count = total_employees - received_count
 
-dashboard_tab, employees_tab, schedule_tab, ai_tab = st.tabs(tab_labels)
+try:
+    approved_week_run = get_approved_run_for_week(selected_week)
+except Exception:
+    approved_week_run = None
+
+week_is_approved = approved_week_run is not None
+week_is_read_only = week_is_past or week_is_approved
+
+dashboard_tab, employees_tab, schedule_tab = st.tabs(tab_labels)
 
 with dashboard_tab:
     st.subheader("Přehled" if is_czech else "Weekly Overview")
@@ -2444,6 +2761,16 @@ with employees_tab:
 with schedule_tab:
     st.subheader("Správa směn" if is_czech else "Schedule Management")
 
+    if week_is_approved:
+        st.success(
+            f"Tento týden je uzamčen. Rozvrh byl schválen v běhu "
+            f"{approved_week_run['run_id']} a je dostupný pouze pro čtení."
+        )
+    elif week_is_past:
+        st.info("Minulý týden je uzamčen a dostupný pouze pro čtení.")
+    elif week_is_locked_by_deadline:
+        st.caption("Termín pro odevzdání preferencí již uplynul. Formulář zaměstnanců je uzamčen.")
+
     st.subheader("Kontrola týdenních údajů" if is_czech else "Weekly Data Validation")
 
     st.write(
@@ -2452,7 +2779,7 @@ with schedule_tab:
 
     st.write(f"Týden začínající: {selected_week}")
 
-    if st.button("Spustit kontrolu" if is_czech else "Run Validation", type="primary"):
+    if st.button("Spustit kontrolu", type="primary", disabled=week_is_read_only):
 
         validation_issues = validate_week_data(
             active_employees,
@@ -2490,96 +2817,26 @@ with schedule_tab:
     result = st.session_state.get("validation_result")
 
     if result and result["week"] == selected_week.isoformat():
-
-        issues = result["issues"]
-
-        critical_count = sum(
-            1 for x in issues
-            if x["severity"] == "Critical"
-        )
-
-        warning_count = sum(
-            1 for x in issues
-            if x["severity"] == "Warning"
-        )
-
-        st.divider()
-
-        a, b = st.columns(2)
-
-        a.metric("Kritické problémy", critical_count)
-        b.metric("Varování", warning_count)
+        issues = result.get("issues", [])
+        critical_count = sum(1 for item in issues if item.get("severity") == "Critical")
+        warning_count = sum(1 for item in issues if item.get("severity") == "Warning")
 
         if critical_count:
-            st.error(
-                "BLOKOVÁNO — Plánování nelze spustit. "
-                "Nejprve je nutné vyřešit kritické problémy."
-            )
-
+            st.error("Kontrola nedokončena — plánování je zablokováno.")
         elif warning_count:
-            st.warning(
-                "Před pokračováním zkontrolujte varování."
-            )
-
+            st.warning("Kontrola dokončena — před plánováním věnujte pozornost upozorněním.")
         else:
-            st.success(
-                "PŘIPRAVENO — Všechna odevzdání zaměstnanců prošla kontrolou."
-            )
+            st.success("Kontrola dokončena — připraveno k plánování.")
 
-        save_status = st.session_state.get(
-            "validation_save_status"
-        )
-
-        if (
-            save_status
-            and save_status["week"] == selected_week.isoformat()
-        ):
-
-            if save_status["error"]:
-                st.error(
-                    "Kontrola byla dokončena, ale synchronizace problémů "
-                    "v databázi Supabase se nezdařila."
-                )
-
-                st.code(save_status["error"])
-
+        save_status = st.session_state.get("validation_save_status")
+        if save_status and save_status.get("week") == selected_week.isoformat():
+            if save_status.get("error"):
+                st.warning("Výsledek kontroly nebylo možné synchronizovat s databází.")
             else:
-                st.success(
-                    f"Aktuálně uložené nebo aktualizované problémy: "
-                    f"{save_status['saved_count']}. "
-                    f"Starší problémy označené jako vyřešené: "
-                    f"{save_status['resolved_count']}."
-                )
+                st.caption("Výsledek kontroly byl uložen.")
 
-        if issues:
-            st.subheader("Zjištěné problémy" if is_czech else "Validation Issues")
-
-            issues_df = pd.DataFrame(issues).copy()
-            issue_column_names = {
-                "employee_id": "ID zaměstnance",
-                "issue_type": "Typ problému",
-                "severity": "Závažnost",
-                "description": "Popis",
-                "recommended_action": "Doporučený postup",
-                "resolution_status": "Stav řešení",
-            }
-            issues_df = issues_df.rename(columns=issue_column_names)
-            if "Závažnost" in issues_df.columns:
-                issues_df["Závažnost"] = issues_df["Závažnost"].replace({
-                    "Critical": "Kritická", "Warning": "Varování"
-                })
-            if "Stav řešení" in issues_df.columns:
-                issues_df["Stav řešení"] = issues_df["Stav řešení"].replace({
-                    "Open": "Otevřeno", "Resolved": "Vyřešeno"
-                })
-            st.dataframe(
-                issues_df,
-                use_container_width=True,
-                hide_index=True
-            )
-
-        else:
-            st.success("Nebyly nalezeny žádné problémy." if is_czech else "No validation issues found.")
+    else:
+        issues = []
 
     st.subheader("Algoritmus plánování" if is_czech else "Scheduling Algorithm")
 
@@ -2601,6 +2858,7 @@ with schedule_tab:
         validation
         and validation.get("week") == selected_week.isoformat()
         and len(validation.get("issues", [])) == 0
+        and not week_is_read_only
     )
 
     if validation_ready:
@@ -2618,7 +2876,7 @@ with schedule_tab:
     if st.button(
         "Vygenerovat týdenní rozvrh",
         type="primary",
-        disabled=not validation_ready
+        disabled=(not validation_ready or week_is_read_only)
     ):
 
         run_id = None
@@ -2633,12 +2891,14 @@ with schedule_tab:
                 "Optimalizační algoritmus právě vytváří rozvrh..."
             ):
 
+                long_shift_history = load_long_shift_history(selected_week)
                 outcome = run_scheduling_algorithm(
                     active_employees,
                     week_preferences,
                     shift_requirements,
                     branches,
-                    selected_week
+                    selected_week,
+                    long_shift_history=long_shift_history
                 )
 
             if outcome["feasible"]:
@@ -2730,12 +2990,14 @@ with schedule_tab:
                 "Žádný rozvrh nebyl schválen ani zveřejněn."
             )
 
-            st.exception(e)
+            st.caption("Podrobnosti technické chyby jsou dostupné v protokolu aplikace.")
 
-    if st.session_state.get("last_schedule_message"):
-        st.caption(
-            st.session_state["last_schedule_message"]
-        )
+    last_attempt_display = st.session_state.get("last_schedule_attempt")
+    if last_attempt_display and last_attempt_display.get("week") == selected_week.isoformat():
+        if last_attempt_display.get("status") == "Feasible":
+            st.success("Plánování dokončeno — rozvrh byl vytvořen.")
+        elif last_attempt_display.get("status") in ("Infeasible", "Failed"):
+            st.error("Plánování nedokončeno — platný rozvrh nebyl vytvořen.")
 
     # --------------------------------------
     # Load run history for selected week
@@ -2767,11 +3029,18 @@ with schedule_tab:
         st.divider()
         st.subheader("Historie plánování" if is_czech else "Schedule Run History")
 
-        st.dataframe(
-            runs,
-            use_container_width=True,
-            hide_index=True
-        )
+        with st.expander("Historie vytvořených variant"):
+            history_columns = [
+                column for column in (
+                    "run_id", "run_status", "manager_approval_status",
+                    "assigned_positions", "unassigned_positions", "completed_at"
+                ) if column in runs.columns
+            ]
+            st.dataframe(
+                runs[history_columns],
+                use_container_width=True,
+                hide_index=True
+            )
 
         feasible_runs = runs[
             runs["run_status"] == "Feasible"
@@ -2806,23 +3075,8 @@ with schedule_tab:
                         display_df["work_date"]
                     ).dt.date
 
-                    st.subheader("Vygenerovaný týdenní rozvrh" if is_czech else "Generated Weekly Schedule")
-
-                    st.dataframe(
-                        display_df[
-                            [
-                                "work_date",
-                                "branch_id",
-                                "employee_id",
-                                "shift_type",
-                                "start_time",
-                                "end_time",
-                                "break_minutes"
-                            ]
-                        ],
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                    st.subheader("Týdenní rozpis směn")
+                    render_schedule_grid(display_df, branches)
 
                     selected_run = feasible_runs[
                         feasible_runs["run_id"].astype(int)
@@ -2830,8 +3084,8 @@ with schedule_tab:
                     ].iloc[0]
 
                     if (
-                        selected_run["manager_approval_status"]
-                        == "Not_Reviewed"
+                        selected_run["manager_approval_status"] == "Not_Reviewed"
+                        and not week_is_read_only
                     ):
 
                         st.divider()
@@ -2912,8 +3166,13 @@ with schedule_tab:
 
                 st.exception(e)
 
-with ai_tab:
-    st.subheader("AI přehledy a reporty" if is_czech else "AI Insights & Reports")
+with schedule_tab:
+    st.divider()
+    st.subheader("Analýza pomocí AI")
+    st.caption(
+        "Vyberte analýzu přímo zde — vedle kontroly a generování rozvrhu. "
+        "AI vysvětluje výsledky a doporučuje další kroky, sama rozvrh nemění."
+    )
 
     # ----------------------------------
     # AI CONFLICT ANALYSIS
@@ -2932,9 +3191,13 @@ with ai_tab:
     )
 
     if st.button(
-        "Spustit AI analýzu konfliktů" if is_czech else "Run AI Conflict Analysis",
+        "Spustit AI analýzu konfliktů",
         type="primary",
-        key="run_ai_conflict_analysis"
+        key="run_ai_conflict_analysis",
+        disabled=not bool(
+            st.session_state.get("validation_result")
+            and st.session_state["validation_result"].get("week") == selected_week.isoformat()
+        )
     ):
 
         try:
@@ -2974,8 +3237,9 @@ with ai_tab:
             st.code(ai_result["error"])
 
         elif ai_result.get("report"):
-            st.markdown("### Zpráva AI pro manažera")
-            st.markdown(ai_result["report"])
+            with st.container(border=True):
+                st.caption("Výsledek AI · analýza konfliktů")
+                st.markdown(ai_result["report"])
 
     st.subheader("🤖 AI asistent plánování" if is_czech else "🤖 AI Planning Assistant")
 
@@ -3054,8 +3318,9 @@ with ai_tab:
                 st.code(planning_result["error"])
 
             elif planning_result.get("report"):
-                st.markdown("### Doporučení AI pro plánování")
-                st.markdown(planning_result["report"])
+                with st.container(border=True):
+                    st.caption("Výsledek AI · plánování")
+                    st.markdown(planning_result["report"])
 
     else:
         st.info(
@@ -3327,8 +3592,9 @@ with ai_tab:
                         )
 
                 if decision_result.get("report"):
-                    st.markdown("### Doporučení AI pro manažera")
-                    st.markdown(decision_result["report"])
+                    with st.container(border=True):
+                        st.caption("Výsledek AI · podpora rozhodování")
+                        st.markdown(decision_result["report"])
 
                 if len(decision_metrics) == 1:
                     st.info(
