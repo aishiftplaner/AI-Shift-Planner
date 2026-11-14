@@ -2377,36 +2377,49 @@ def render_schedule_grid(assignments, branches_df):
     )
 
     excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        grid.to_excel(writer, index=False, sheet_name="Týdenní rozpis")
-        worksheet = writer.sheets["Týdenní rozpis"]
-        from openpyxl.styles import Alignment, Border, Side, Font
-        thin = Side(style="thin", color="000000")
-        for row in worksheet.iter_rows():
-            for cell in row:
-                cell.alignment = Alignment(
-                    horizontal="center", vertical="center", wrap_text=True
-                )
-                cell.border = Border(
-                    left=thin, right=thin, top=thin, bottom=thin
-                )
-                cell.font = Font(name="Arial", size=10, bold=(cell.row == 1))
-        worksheet.freeze_panes = "C2"
-        worksheet.column_dimensions["A"].width = 18
-        worksheet.column_dimensions["B"].width = 14
-        for col_idx in range(3, len(grid.columns) + 1):
-            worksheet.column_dimensions[
-                worksheet.cell(row=1, column=col_idx).column_letter
-            ].width = 22
-        for row_idx in range(2, len(grid) + 2):
-            worksheet.row_dimensions[row_idx].height = 34
+    try:
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            grid.to_excel(writer, index=False, sheet_name="Týdenní rozpis")
+            worksheet = writer.sheets["Týdenní rozpis"]
+            from openpyxl.styles import Alignment, Border, Side, Font
+            thin = Side(style="thin", color="000000")
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    cell.alignment = Alignment(
+                        horizontal="center", vertical="center", wrap_text=True
+                    )
+                    cell.border = Border(
+                        left=thin, right=thin, top=thin, bottom=thin
+                    )
+                    cell.font = Font(name="Arial", size=10, bold=(cell.row == 1))
+            worksheet.freeze_panes = "C2"
+            worksheet.column_dimensions["A"].width = 18
+            worksheet.column_dimensions["B"].width = 14
+            for col_idx in range(3, len(grid.columns) + 1):
+                worksheet.column_dimensions[
+                    worksheet.cell(row=1, column=col_idx).column_letter
+                ].width = 22
+            for row_idx in range(2, len(grid) + 2):
+                worksheet.row_dimensions[row_idx].height = 34
 
-    st.download_button(
-        "Stáhnout rozpis v Excelu",
-        data=excel_buffer.getvalue(),
-        file_name=f"rozpis_{data['work_date'].min().isoformat()}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        st.download_button(
+            "Stáhnout rozpis v Excelu",
+            data=excel_buffer.getvalue(),
+            file_name=f"rozpis_{data['work_date'].min().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except ImportError:
+        st.warning(
+            "Pro export do Excelu chybí knihovna openpyxl. "
+            "Do requirements.txt přidejte řádek: openpyxl"
+        )
+        csv_data = grid.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+        st.download_button(
+            "Stáhnout rozpis jako CSV",
+            data=csv_data,
+            file_name=f"rozpis_{data['work_date'].min().isoformat()}.csv",
+            mime="text/csv"
+        )
 
     with st.expander("Souhrn odpracovaných hodin zaměstnanců"):
         summary = data.copy()
