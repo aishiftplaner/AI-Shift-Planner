@@ -8,6 +8,7 @@ from supabase import create_client
 from google import genai
 
 from datetime import date, datetime, timedelta, timezone, time
+from zoneinfo import ZoneInfo
 from scipy.optimize import milp, LinearConstraint, Bounds
 from scipy.sparse import lil_matrix
 
@@ -20,6 +21,78 @@ st.set_page_config(
     page_icon="📅",
     layout="wide"
 )
+
+
+def apply_light_theme():
+    """Apply a consistent, high-contrast light interface."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            color-scheme: light;
+            --text-color: #1F2937;
+            --background-color: #F5F7FB;
+            --secondary-background-color: #FFFFFF;
+            --primary-color: #2563EB;
+        }
+        html, body, [data-testid="stAppViewContainer"] {
+            background: #F5F7FB !important;
+            color: #1F2937 !important;
+        }
+        [data-testid="stHeader"] {
+            background: rgba(245,247,251,0.96) !important;
+        }
+        .stApp, .stApp p, .stApp label, .stApp h1, .stApp h2,
+        .stApp h3, .stApp h4, .stApp [data-testid="stMarkdownContainer"],
+        .stApp [data-testid="stCaptionContainer"],
+        .stApp [data-testid="stMetricLabel"],
+        .stApp [data-testid="stMetricValue"] {
+            color: #1F2937 !important;
+        }
+        [data-testid="stMetric"] {
+            background: #FFFFFF !important;
+            border: 1px solid #DCE3ED !important;
+            padding: 16px !important;
+            border-radius: 12px !important;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+        }
+        [data-testid="stTabs"] button {
+            color: #334155 !important;
+            font-weight: 600 !important;
+            padding-top: 12px !important;
+            padding-bottom: 12px !important;
+        }
+        [data-testid="stTabs"] button[aria-selected="true"] {
+            color: #1D4ED8 !important;
+        }
+        [data-testid="stExpander"] {
+            background: #FFFFFF !important;
+            border: 1px solid #DCE3ED !important;
+            border-radius: 12px !important;
+        }
+        [data-testid="stDataFrame"] {
+            background: #FFFFFF !important;
+            border: 1px solid #DCE3ED !important;
+            border-radius: 10px !important;
+            overflow: hidden !important;
+        }
+        input, textarea, [data-baseweb="select"] > div {
+            background: #FFFFFF !important;
+            color: #1F2937 !important;
+        }
+        [data-testid="stButton"] button {
+            border-radius: 9px !important;
+            font-weight: 600 !important;
+        }
+        [data-testid="stButton"] button[kind="primary"] {
+            background: #2563EB !important;
+            color: #FFFFFF !important;
+            border-color: #2563EB !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # ==========================================
@@ -953,8 +1026,8 @@ def validate_week_data(active_employees, week_preferences):
     issues = []
 
     weekdays = [
-        ("Pondělí" if cz else "Monday"), ("Úterý" if cz else "Tuesday"), ("Středa" if cz else "Wednesday"), ("Čtvrtek" if cz else "Thursday"),
-        ("Pátek" if cz else "Friday"), ("Sobota" if cz else "Saturday"), ("Neděle" if cz else "Sunday")
+        ("Pondělí" if is_czech else "Monday"), ("Úterý" if is_czech else "Tuesday"), ("Středa" if is_czech else "Wednesday"), ("Čtvrtek" if is_czech else "Thursday"),
+        ("Pátek" if is_czech else "Friday"), ("Sobota" if is_czech else "Saturday"), ("Neděle" if is_czech else "Sunday")
     ]
 
     valid_shifts = ["Morning", "Evening", "Flexible"]
@@ -1094,20 +1167,7 @@ def validate_week_data(active_employees, week_preferences):
 # 5. EMPLOYEE AVAILABILITY FORM
 # ==========================================
 def employee_form():
-    st.markdown(
-        """
-        <style>
-        .stApp { background-color: #F7F9FC; }
-        [data-testid="stHeader"] { background: rgba(247,249,252,0.92); }
-        div[data-testid="stForm"], div[data-testid="stExpander"] {
-            background: #FFFFFF;
-            border: 1px solid #E5EAF1;
-            border-radius: 12px;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+    apply_light_theme()
     form_language = st.sidebar.selectbox(
         "Language / Jazyk",
         ["English", "Čeština"],
@@ -1169,6 +1229,34 @@ def employee_form():
             value=get_monday()
         )
 
+        prague_tz = ZoneInfo("Europe/Prague")
+        now_local = datetime.now(prague_tz)
+        current_monday = now_local.date() - timedelta(days=now_local.weekday())
+        submission_deadline = datetime.combine(
+            week_start - timedelta(days=3),
+            time(12, 0),
+            tzinfo=prague_tz
+        )
+        form_locked = (
+            week_start < current_monday
+            or now_local >= submission_deadline
+        )
+
+        if form_locked:
+            st.warning(
+                "Termín odevzdání uplynul. Změny pro tento týden jsou uzamčeny."
+                if cz else
+                "The submission deadline has passed. Changes for this week are locked."
+            )
+        else:
+            st.info(
+                (
+                    f"Termín odevzdání: pátek 12:00 ({submission_deadline:%d.%m.%Y %H:%M})."
+                    if cz else
+                    f"Submission deadline: Friday 12:00 ({submission_deadline:%d %b %Y, %H:%M})."
+                )
+            )
+
         weekdays = [
             "Monday", "Tuesday", "Wednesday", "Thursday",
             "Friday", "Saturday", "Sunday"
@@ -1183,7 +1271,8 @@ def employee_form():
         required_days = st.multiselect(
             (f"Vyberte přesně {days_off_count} dnů volna" if cz else f"Choose exactly {days_off_count} days off"),
             weekdays,
-            format_func=lambda day: weekday_labels[day] if cz else day
+            format_func=lambda day: weekday_labels[day] if cz else day,
+            disabled=form_locked
         )
 
         st.caption(
@@ -1196,7 +1285,8 @@ def employee_form():
             format_func=lambda value: (
                 {"Morning": "Ranní", "Evening": "Večerní", "Flexible": "Flexibilní"}[value]
                 if cz else value
-            )
+            ),
+            disabled=form_locked
         )
 
         consent = st.selectbox(
@@ -1205,12 +1295,13 @@ def employee_form():
             format_func=lambda value: (
                 {"Unknown": "Nevyplněno", "Yes": "Ano", "No": "Ne"}[value]
                 if cz else value
-            )
+            ),
+            disabled=form_locked
         )
 
-        comment = st.text_area("Další komentář (nepovinné)" if cz else "Additional comment (optional)")
+        comment = st.text_area("Další komentář (nepovinné)" if cz else "Additional comment (optional)", disabled=form_locked)
 
-        if st.button("Odeslat dostupnost" if cz else "Submit availability", type="primary"):
+        if st.button("Odeslat dostupnost" if cz else "Submit availability", type="primary", disabled=form_locked):
 
             if week_start.weekday() != 0:
                 st.error("Vybraný týden musí začínat v pondělí." if cz else "The selected week must start on Monday.")
@@ -2003,31 +2094,7 @@ if page == "employee":
 st.title("📅 AI Shift Planner")
 st.subheader("Manager Dashboard")
 
-st.markdown(
-    '''
-    <style>
-    .stApp { background-color: #F7F9FC; }
-    [data-testid="stHeader"] { background: rgba(247,249,252,0.92); }
-    [data-testid="stMetric"] {
-        background: #FFFFFF;
-        border: 1px solid #E5EAF1;
-        padding: 16px;
-        border-radius: 12px;
-    }
-    div[data-testid="stTabs"] button {
-        font-weight: 600;
-        padding-top: 12px;
-        padding-bottom: 12px;
-    }
-    div[data-testid="stExpander"] {
-        border: 1px solid #E5EAF1;
-        border-radius: 12px;
-        background: #FFFFFF;
-    }
-    </style>
-    ''',
-    unsafe_allow_html=True
-)
+apply_light_theme()
 
 language = st.sidebar.selectbox(
     "Language / Jazyk",
@@ -2082,7 +2149,7 @@ except Exception as e:
 
 
 st.divider()
-st.header("Weekly Schedule Management")
+st.header("Týdenní plánování směn" if is_czech else "Weekly Schedule Management")
 
 selected_week = st.date_input(
     "Vyberte týden (pondělí)" if is_czech else "Select week (Monday)",
@@ -2198,6 +2265,41 @@ with dashboard_tab:
          else f"Week starting: {selected_week}")
     )
 
+    current_validation = st.session_state.get("validation_result")
+    validation_matches_week = bool(
+        current_validation
+        and current_validation.get("week") == selected_week.isoformat()
+    )
+    validation_issue_count = (
+        len(current_validation.get("issues", []))
+        if validation_matches_week else None
+    )
+    status_col1, status_col2 = st.columns(2)
+    if validation_matches_week and validation_issue_count == 0:
+        status_col1.success("Připraveno k plánování" if is_czech else "Ready for scheduling")
+    elif validation_matches_week:
+        status_col1.warning(
+            f"Počet problémů: {validation_issue_count}" if is_czech
+            else f"Validation issues: {validation_issue_count}"
+        )
+    else:
+        status_col1.info("Kontrola zatím nebyla spuštěna" if is_czech else "Validation not run yet")
+    status_col2.metric(
+        "Dokončení žádostí" if is_czech else "Submission completion",
+        f"{received_count}/{total_employees}"
+    )
+    if total_employees:
+        st.progress(received_count / total_employees)
+
+    st.markdown(
+        '<a href="?page=employee" target="_blank" '
+        'style="display:inline-block;padding:10px 16px;border-radius:9px;'
+        'background:#2563EB;color:white !important;text-decoration:none;font-weight:600;">'
+        + ("Otevřít formulář dostupnosti zaměstnance" if is_czech else "Open Employee Availability Form")
+        + '</a>',
+        unsafe_allow_html=True
+    )
+
     st.divider()
     st.header("Přehled odevzdání za týden" if is_czech else "Weekly Submission Overview")
 
@@ -2223,7 +2325,7 @@ with dashboard_tab:
             branches,
             use_container_width=True,
             hide_index=True
-        )
+        , theme="light")
 
         st.subheader("Požadavky na směny" if is_czech else "Shift Requirements")
 
@@ -2231,7 +2333,7 @@ with dashboard_tab:
             shift_requirements,
             use_container_width=True,
             hide_index=True
-        )
+        , theme="light")
 
         st.subheader("Firemní pravidla" if is_czech else "Company Rules")
 
@@ -2239,7 +2341,7 @@ with dashboard_tab:
             company_rules,
             use_container_width=True,
             hide_index=True
-        )
+        , theme="light")
 
 with employees_tab:
     st.subheader("Zaměstnanci a dostupnost" if is_czech else "Employees & Availability")
@@ -2250,7 +2352,7 @@ with employees_tab:
         employees,
         use_container_width=True,
         hide_index=True
-    )
+    , theme="light")
 
     st.subheader("Týdenní preference zaměstnanců" if is_czech else "Weekly Employee Preferences")
 
@@ -2271,7 +2373,7 @@ with employees_tab:
         ],
         use_container_width=True,
         hide_index=True
-    )
+    , theme="light")
 
     st.divider()
 
@@ -2297,12 +2399,12 @@ with employees_tab:
             ],
             use_container_width=True,
             hide_index=True
-        )
+        , theme="light")
 
 with schedule_tab:
     st.subheader("Správa směn" if is_czech else "Schedule Management")
 
-    st.subheader("Weekly Data Validation")
+    st.subheader("Kontrola týdenních údajů" if is_czech else "Weekly Data Validation")
 
     st.write(
         "The Validation Engine checks employee submissions before scheduling."
@@ -2310,7 +2412,7 @@ with schedule_tab:
 
     st.write(f"Week starting: {selected_week}")
 
-    if st.button("Run Validation", type="primary"):
+    if st.button("Spustit kontrolu" if is_czech else "Run Validation", type="primary"):
 
         validation_issues = validate_week_data(
             active_employees,
@@ -2410,18 +2512,18 @@ with schedule_tab:
                 )
 
         if issues:
-            st.subheader("Validation Issues")
+            st.subheader("Zjištěné problémy" if is_czech else "Validation Issues")
 
             st.dataframe(
                 pd.DataFrame(issues),
                 use_container_width=True,
                 hide_index=True
-            )
+            , theme="light")
 
         else:
-            st.success("No validation issues found.")
+            st.success("Nebyly nalezeny žádné problémy." if is_czech else "No validation issues found.")
 
-    st.subheader("Scheduling Algorithm")
+    st.subheader("Algoritmus plánování" if is_czech else "Scheduling Algorithm")
 
     st.write(
         "The mathematical optimizer allocates employees to shifts. "
@@ -2605,13 +2707,13 @@ with schedule_tab:
     if not runs.empty:
 
         st.divider()
-        st.subheader("Schedule Run History")
+        st.subheader("Historie plánování" if is_czech else "Schedule Run History")
 
         st.dataframe(
             runs,
             use_container_width=True,
             hide_index=True
-        )
+        , theme="light")
 
         feasible_runs = runs[
             runs["run_status"] == "Feasible"
@@ -2646,7 +2748,7 @@ with schedule_tab:
                         display_df["work_date"]
                     ).dt.date
 
-                    st.subheader("Generated Weekly Schedule")
+                    st.subheader("Vygenerovaný týdenní rozvrh" if is_czech else "Generated Weekly Schedule")
 
                     st.dataframe(
                         display_df[
@@ -2662,7 +2764,7 @@ with schedule_tab:
                         ],
                         use_container_width=True,
                         hide_index=True
-                    )
+                    , theme="light")
 
                     selected_run = feasible_runs[
                         feasible_runs["run_id"].astype(int)
@@ -2675,7 +2777,7 @@ with schedule_tab:
                     ):
 
                         st.divider()
-                        st.subheader("Manager Approval")
+                        st.subheader("Schválení manažerem" if is_czech else "Manager Approval")
 
                         manager_comment = st.text_area(
                             "Manager comment (optional)",
@@ -2759,7 +2861,7 @@ with ai_tab:
     # AI CONFLICT ANALYSIS
     # ----------------------------------
     st.divider()
-    st.subheader("🤖 AI Conflict Analysis")
+    st.subheader("🤖 AI analýza konfliktů" if is_czech else "🤖 AI Conflict Analysis")
 
     st.write(
         "Gemini analyzes validation findings, explains their impact "
@@ -2772,7 +2874,7 @@ with ai_tab:
     )
 
     if st.button(
-        "Run AI Conflict Analysis",
+        "Spustit AI analýzu konfliktů" if is_czech else "Run AI Conflict Analysis",
         type="primary",
         key="run_ai_conflict_analysis"
     ):
@@ -2817,7 +2919,7 @@ with ai_tab:
             st.markdown("### AI Manager Report")
             st.markdown(ai_result["report"])
 
-    st.subheader("🤖 AI Planning Assistant")
+    st.subheader("🤖 AI asistent plánování" if is_czech else "🤖 AI Planning Assistant")
 
     st.write(
         "If the mathematical optimizer cannot produce a valid schedule, "
@@ -2848,7 +2950,7 @@ with ai_tab:
         )
 
         if st.button(
-            "Run AI Planning Assistant",
+            "Spustit AI asistenta plánování" if is_czech else "Run AI Planning Assistant",
             type="primary",
             key="run_ai_planning_assistant"
         ):
@@ -2907,7 +3009,7 @@ with ai_tab:
     # AI DECISION SUPPORT
     # --------------------------------------
     st.divider()
-    st.subheader("🤖 AI Decision Support")
+    st.subheader("🤖 AI podpora rozhodování" if is_czech else "🤖 AI Decision Support")
 
     st.write(
         "Compare recent successful schedule variants using transparent "
@@ -2921,7 +3023,7 @@ with ai_tab:
     )
 
     if st.button(
-        "Run AI Decision Support",
+        "Spustit AI podporu rozhodování" if is_czech else "Run AI Decision Support",
         type="primary",
         key="run_ai_decision_support"
     ):
@@ -3083,7 +3185,7 @@ with ai_tab:
                     pd.DataFrame(summary_rows),
                     use_container_width=True,
                     hide_index=True
-                )
+                , theme="light")
 
                 assignment_comparisons = decision_result.get(
                     "assignment_comparisons", []
@@ -3136,7 +3238,7 @@ with ai_tab:
                         pd.DataFrame(assignment_rows),
                         use_container_width=True,
                         hide_index=True
-                    )
+                    , theme="light")
                 elif len(decision_metrics) == 1:
                     st.info(
                         "Only one successful variant is available. "
@@ -3159,7 +3261,7 @@ with ai_tab:
                             pd.DataFrame(detail_rows),
                             use_container_width=True,
                             hide_index=True
-                        )
+                        , theme="light")
 
                 if decision_result.get("report"):
                     st.markdown("### AI Manager Recommendation")
