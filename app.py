@@ -76,6 +76,24 @@ def apply_light_theme():
             border-radius: 10px !important;
             overflow: hidden !important;
         }
+        /* Keep status messages readable on the light interface. */
+        [data-testid="stAlert"] {
+            border-radius: 10px !important;
+        }
+        [data-testid="stAlert"] p,
+        [data-testid="stAlert"] div,
+        [data-testid="stAlert"] span {
+            color: #1F2937 !important;
+        }
+        /* Streamlit's dataframe uses an embedded grid; the app theme is
+           also fixed to light in .streamlit/config.toml. */
+        [data-testid="stDataFrame"] canvas {
+            background: #FFFFFF !important;
+        }
+        [data-testid="stDataFrame"] [role="grid"] {
+            background: #FFFFFF !important;
+            color: #1F2937 !important;
+        }
         input, textarea, [data-baseweb="select"] > div {
             background: #FFFFFF !important;
             color: #1F2937 !important;
@@ -109,7 +127,7 @@ def init_supabase():
 try:
     supabase = init_supabase()
 except Exception as e:
-    st.error("Could not connect to Supabase.")
+    st.error("Nepodařilo se připojit k databázi Supabase.")
     st.exception(e)
     st.stop()
 
@@ -208,7 +226,7 @@ def generate_ai_conflict_analysis(issues, selected_week):
     }
 
     prompt = f"""
-You are the AI Conflict Analysis module of an employee shift-planning system.
+Jsi modul AI analýzy konfliktů v systému plánování směn zaměstnanců. Odpovídej výhradně česky.
 
 Analyze the following validation results for the manager.
 
@@ -1168,12 +1186,8 @@ def validate_week_data(active_employees, week_preferences):
 # ==========================================
 def employee_form():
     apply_light_theme()
-    form_language = st.sidebar.selectbox(
-        "Language / Jazyk",
-        ["English", "Čeština"],
-        key="employee_form_language"
-    )
-    cz = form_language == "Čeština"
+    # The application interface is intentionally Czech-only.
+    cz = True
 
     st.title("📅 Formulář dostupnosti zaměstnance" if cz else "📅 Employee Availability Form")
 
@@ -2091,46 +2105,38 @@ if page == "employee":
 # ==========================================
 # 9. MANAGER DASHBOARD
 # ==========================================
-st.title("📅 AI Shift Planner")
-st.subheader("Manager Dashboard")
+st.title("📅 Plánovač směn s AI")
+st.subheader("Manažerský přehled")
 
 apply_light_theme()
 
-language = st.sidebar.selectbox(
-    "Language / Jazyk",
-    ["English", "Čeština"],
-    key="app_language"
-)
-is_czech = language == "Čeština"
+# The manager interface is intentionally Czech-only.
+is_czech = True
 
-tab_labels = (
-    ["Přehled", "Zaměstnanci a dostupnost", "Správa směn", "AI přehledy a reporty"]
-    if is_czech
-    else ["Dashboard", "Employees & Availability", "Schedule Management", "AI Insights & Reports"]
-)
+tab_labels = ["Přehled", "Zaměstnanci a dostupnost", "Správa směn", "AI přehledy a reporty"]
 
 # ==========================================
 # 9.1. GEMINI API CONNECTION TEST
 # ==========================================
-with st.expander("Gemini AI Connection Test"):
+with st.expander("Test připojení Gemini AI"):
     st.write(
-        "Check whether the Gemini API is connected."
+        "Ověřte, zda je rozhraní Gemini API připojeno."
     )
 
-    if st.button("Test Gemini Connection"):
+    if st.button("Otestovat připojení Gemini"):
         try:
-            with st.spinner("Connecting to Gemini..."):
+            with st.spinner("Připojování ke Gemini..."):
                 answer = test_gemini_connection()
 
             st.success(
-                "Gemini API connected successfully!"
+                "Gemini API je úspěšně připojeno!"
             )
 
-            st.write("Gemini response:")
+            st.write("Odpověď Gemini:")
             st.write(answer)
 
         except Exception as e:
-            st.error("Gemini API connection failed.")
+            st.error("Připojení ke Gemini API se nezdařilo.")
             st.error(str(e))
 
 # ==========================================
@@ -2143,7 +2149,7 @@ try:
     company_rules = load_table("company_rules")
 
 except Exception as e:
-    st.error("Could not load database tables.")
+    st.error("Nepodařilo se načíst tabulky z databáze.")
     st.exception(e)
     st.stop()
 
@@ -2158,7 +2164,7 @@ selected_week = st.date_input(
 )
 
 if selected_week.weekday() != 0:
-    st.warning("Please select a Monday.")
+    st.warning("Vyberte prosím pondělí.")
     st.stop()
 
 
@@ -2262,7 +2268,7 @@ with dashboard_tab:
     st.subheader("Přehled" if is_czech else "Weekly Overview")
     st.write(
         (f"Týden začínající: {selected_week}" if is_czech
-         else f"Week starting: {selected_week}")
+         else f"Týden začínající: {selected_week}")
     )
 
     current_validation = st.session_state.get("validation_result")
@@ -2280,7 +2286,7 @@ with dashboard_tab:
     elif validation_matches_week:
         status_col1.warning(
             f"Počet problémů: {validation_issue_count}" if is_czech
-            else f"Validation issues: {validation_issue_count}"
+            else f"Počet problémů při kontrole: {validation_issue_count}"
         )
     else:
         status_col1.info("Kontrola zatím nebyla spuštěna" if is_czech else "Validation not run yet")
@@ -2356,7 +2362,7 @@ with employees_tab:
 
     st.subheader("Týdenní preference zaměstnanců" if is_czech else "Weekly Employee Preferences")
 
-    st.write(f"Week starting: {selected_week}")
+    st.write(f"Týden začínající: {selected_week}")
 
     st.dataframe(
         weekly_view[
@@ -2385,7 +2391,7 @@ with employees_tab:
 
     if missing_employees.empty:
         st.success(
-            "All employees have submitted their preferences."
+            "Všichni zaměstnanci odevzdali své preference."
         )
 
     else:
@@ -2407,10 +2413,10 @@ with schedule_tab:
     st.subheader("Kontrola týdenních údajů" if is_czech else "Weekly Data Validation")
 
     st.write(
-        "The Validation Engine checks employee submissions before scheduling."
+        "Kontrolní modul ověřuje odevzdané údaje zaměstnanců před vytvořením rozvrhu."
     )
 
-    st.write(f"Week starting: {selected_week}")
+    st.write(f"Týden začínající: {selected_week}")
 
     if st.button("Spustit kontrolu" if is_czech else "Run Validation", type="primary"):
 
@@ -2467,23 +2473,23 @@ with schedule_tab:
 
         a, b = st.columns(2)
 
-        a.metric("Critical Issues", critical_count)
-        b.metric("Warnings", warning_count)
+        a.metric("Kritické problémy", critical_count)
+        b.metric("Varování", warning_count)
 
         if critical_count:
             st.error(
-                "BLOCKED — Scheduling cannot start. "
-                "Critical issues must be resolved."
+                "BLOKOVÁNO — Plánování nelze spustit. "
+                "Nejprve je nutné vyřešit kritické problémy."
             )
 
         elif warning_count:
             st.warning(
-                "Review the warnings before proceeding."
+                "Před pokračováním zkontrolujte varování."
             )
 
         else:
             st.success(
-                "READY — All employee submissions passed validation."
+                "PŘIPRAVENO — Všechna odevzdání zaměstnanců prošla kontrolou."
             )
 
         save_status = st.session_state.get(
@@ -2497,25 +2503,43 @@ with schedule_tab:
 
             if save_status["error"]:
                 st.error(
-                    "Validation completed, but synchronizing issues "
-                    "in Supabase failed."
+                    "Kontrola byla dokončena, ale synchronizace problémů "
+                    "v databázi Supabase se nezdařila."
                 )
 
                 st.code(save_status["error"])
 
             else:
                 st.success(
-                    f"Current issues saved/updated: "
+                    f"Aktuálně uložené nebo aktualizované problémy: "
                     f"{save_status['saved_count']}. "
-                    f"Old issues marked Resolved: "
+                    f"Starší problémy označené jako vyřešené: "
                     f"{save_status['resolved_count']}."
                 )
 
         if issues:
             st.subheader("Zjištěné problémy" if is_czech else "Validation Issues")
 
+            issues_df = pd.DataFrame(issues).copy()
+            issue_column_names = {
+                "employee_id": "ID zaměstnance",
+                "issue_type": "Typ problému",
+                "severity": "Závažnost",
+                "description": "Popis",
+                "recommended_action": "Doporučený postup",
+                "resolution_status": "Stav řešení",
+            }
+            issues_df = issues_df.rename(columns=issue_column_names)
+            if "Závažnost" in issues_df.columns:
+                issues_df["Závažnost"] = issues_df["Závažnost"].replace({
+                    "Critical": "Kritická", "Warning": "Varování"
+                })
+            if "Stav řešení" in issues_df.columns:
+                issues_df["Stav řešení"] = issues_df["Stav řešení"].replace({
+                    "Open": "Otevřeno", "Resolved": "Vyřešeno"
+                })
             st.dataframe(
-                pd.DataFrame(issues),
+                issues_df,
                 use_container_width=True,
                 hide_index=True
             )
@@ -2526,15 +2550,15 @@ with schedule_tab:
     st.subheader("Algoritmus plánování" if is_czech else "Scheduling Algorithm")
 
     st.write(
-        "The mathematical optimizer allocates employees to shifts. "
-        "Branch positions are assigned after the shift allocation."
+        "Matematický optimalizátor přiřazuje zaměstnance ke směnám. "
+        "Přiřazení zaměstnanců na jednotlivé pobočky následuje po rozdělení směn."
     )
 
     st.info(
-        "Hard rules: exact contract workdays and requested days off, "
-        "maximum one shift per day, explicit Long Shift consent, "
-        "minimum 11-hour daily rest and a 35-hour weekly-rest check. "
-        "Shift preferences are treated as soft preferences."
+        "Pevná pravidla: přesný počet pracovních dnů podle smlouvy a požadované volné dny, "
+        "nejvýše jedna směna denně, výslovný souhlas s dlouhou směnou, "
+        "minimálně 11 hodin denního odpočinku a kontrola 35hodinového týdenního odpočinku. "
+        "Preference směn jsou zohledněny jako měkčí podmínky."
     )
 
     validation = st.session_state.get("validation_result")
@@ -2546,19 +2570,19 @@ with schedule_tab:
     )
 
     if validation_ready:
-        st.success("Validation status: READY")
+        st.success("Stav kontroly: PŘIPRAVENO")
 
     else:
         st.warning(
-            "Scheduling is locked. Run Validation and obtain READY "
-            "for this exact week."
+            "Plánování je uzamčeno. Spusťte kontrolu a získejte stav PŘIPRAVENO "
+            "pro tento konkrétní týden."
         )
 
     # --------------------------------------
     # Generate weekly schedule
     # --------------------------------------
     if st.button(
-        "Generate Weekly Schedule",
+        "Vygenerovat týdenní rozvrh",
         type="primary",
         disabled=not validation_ready
     ):
@@ -2572,7 +2596,7 @@ with schedule_tab:
             run_id = create_schedule_run(selected_week)
 
             with st.spinner(
-                "The optimization algorithm is generating the schedule..."
+                "Optimalizační algoritmus právě vytváří rozvrh..."
             ):
 
                 outcome = run_scheduling_algorithm(
@@ -2607,7 +2631,7 @@ with schedule_tab:
                 }
 
                 st.success(
-                    f"Schedule generated successfully. Run ID: {run_id}"
+                    f"Rozvrh byl úspěšně vytvořen. ID běhu: {run_id}"
                 )
 
             else:
@@ -2632,7 +2656,7 @@ with schedule_tab:
                     "outcome": outcome
                 }
 
-                st.error("No valid schedule was produced.")
+                st.error("Nepodařilo se vytvořit platný rozvrh.")
 
             st.session_state["last_schedule_message"] = (
                 outcome["message"]
@@ -2650,7 +2674,7 @@ with schedule_tab:
 
             safe_failure_outcome = {
                 "feasible": False,
-                "message": "Scheduling execution failed.",
+                "message": "Spuštění plánování se nezdařilo.",
                 "assigned_positions": 0,
                 "unassigned_positions": 0
             }
@@ -2663,13 +2687,13 @@ with schedule_tab:
             }
 
             st.session_state["last_schedule_message"] = (
-                "Scheduling execution failed. "
-                "Check the technical error before trying again."
+                "Spuštění plánování se nezdařilo. "
+                "Před dalším pokusem zkontrolujte technickou chybu."
             )
 
             st.error(
-                "Scheduling run failed. "
-                "No schedule was approved or published."
+                "Běh plánování selhal. "
+                "Žádný rozvrh nebyl schválen ani zveřejněn."
             )
 
             st.exception(e)
@@ -2699,7 +2723,7 @@ with schedule_tab:
         runs = pd.DataFrame()
 
         st.error(
-            "Could not load schedule run history."
+            "Nepodařilo se načíst historii plánování."
         )
 
         st.exception(e)
@@ -2722,7 +2746,7 @@ with schedule_tab:
         if not feasible_runs.empty:
 
             selected_run_id = st.selectbox(
-                "View generated schedule (Run ID)",
+                "Zobrazit vytvořený rozvrh (ID běhu)",
                 feasible_runs["run_id"].astype(int).tolist(),
                 key="view_schedule_run"
             )
@@ -2780,7 +2804,7 @@ with schedule_tab:
                         st.subheader("Schválení manažerem" if is_czech else "Manager Approval")
 
                         manager_comment = st.text_area(
-                            "Manager comment (optional)",
+                            "Komentář manažera (nepovinný)",
                             key=f"approval_comment_{selected_run_id}"
                         )
 
@@ -2789,7 +2813,7 @@ with schedule_tab:
                         with approve_col:
 
                             if st.button(
-                                "Approve Schedule",
+                                "Schválit rozvrh",
                                 type="primary",
                                 key=f"approve_{selected_run_id}"
                             ):
@@ -2802,22 +2826,22 @@ with schedule_tab:
                                     )
 
                                     st.success(
-                                        "Schedule approved. "
-                                        "The decision was saved."
+                                        "Rozvrh byl schválen. "
+                                        "Rozhodnutí bylo uloženo."
                                     )
 
                                     st.rerun()
 
                                 except Exception as e:
                                     st.error(
-                                        "Could not save manager approval."
+                                        "Nepodařilo se uložit schválení manažera."
                                     )
                                     st.exception(e)
 
                         with reject_col:
 
                             if st.button(
-                                "Reject Schedule",
+                                "Zamítnout rozvrh",
                                 key=f"reject_{selected_run_id}"
                             ):
 
@@ -2829,27 +2853,27 @@ with schedule_tab:
                                     )
 
                                     st.warning(
-                                        "Schedule rejected. "
-                                        "The decision was saved."
+                                        "Rozvrh byl zamítnut. "
+                                        "Rozhodnutí bylo uloženo."
                                     )
 
                                     st.rerun()
 
                                 except Exception as e:
                                     st.error(
-                                        "Could not save manager rejection."
+                                        "Nepodařilo se uložit zamítnutí manažera."
                                     )
                                     st.exception(e)
 
                     else:
                         st.info(
-                            "Manager decision: "
+                            "Rozhodnutí manažera: "
                             f"{selected_run['manager_approval_status']}"
                         )
 
             except Exception as e:
                 st.error(
-                    "Could not load the selected schedule."
+                    "Nepodařilo se načíst vybraný rozvrh."
                 )
 
                 st.exception(e)
@@ -2864,13 +2888,13 @@ with ai_tab:
     st.subheader("🤖 AI analýza konfliktů" if is_czech else "🤖 AI Conflict Analysis")
 
     st.write(
-        "Gemini analyzes validation findings, explains their impact "
-        "and suggests actions for the manager."
+        "Gemini analyzuje výsledky kontroly, vysvětluje jejich dopad "
+        "a navrhuje manažerovi další kroky."
     )
 
     st.caption(
-        "Only anonymized validation information is sent to Gemini. "
-        "The AI does not modify the schedule or database."
+        "Do Gemini se odesílají pouze anonymizované informace o kontrole. "
+        "Umělá inteligence nemění rozvrh ani databázi."
     )
 
     if st.button(
@@ -2881,7 +2905,7 @@ with ai_tab:
 
         try:
             with st.spinner(
-                "Gemini is analyzing the validation results..."
+                "Gemini analyzuje výsledky kontroly..."
             ):
 
                 ai_report = generate_ai_conflict_analysis(
@@ -2912,24 +2936,24 @@ with ai_tab:
     ):
 
         if ai_result.get("error"):
-            st.error("AI Conflict Analysis failed.")
+            st.error("Analýza konfliktů pomocí AI se nezdařila.")
             st.code(ai_result["error"])
 
         elif ai_result.get("report"):
-            st.markdown("### AI Manager Report")
+            st.markdown("### Zpráva AI pro manažera")
             st.markdown(ai_result["report"])
 
     st.subheader("🤖 AI asistent plánování" if is_czech else "🤖 AI Planning Assistant")
 
     st.write(
-        "If the mathematical optimizer cannot produce a valid schedule, "
-        "Gemini can analyze aggregated planning data and suggest "
-        "alternative actions for the manager."
+        "Pokud matematický optimalizátor nedokáže vytvořit platný rozvrh, "
+        "Gemini může analyzovat souhrnné údaje o plánování a navrhnout "
+        "alternativní postupy pro manažera."
     )
 
     st.caption(
-        "The AI only proposes scenarios. It does not change employee "
-        "preferences, contracts, shift requirements or database records."
+        "Umělá inteligence pouze navrhuje scénáře. Nemění "
+        "preference zaměstnanců, smlouvy, požadavky na směny ani záznamy v databázi."
     )
 
     last_attempt = st.session_state.get(
@@ -2945,8 +2969,8 @@ with ai_tab:
     if planning_available:
 
         st.warning(
-            "The latest scheduling attempt for this week was unsuccessful. "
-            "You can ask the AI Planning Assistant to analyze the situation."
+            "Poslední pokus o vytvoření rozvrhu pro tento týden nebyl úspěšný. "
+            "Můžete požádat AI asistenta plánování o analýzu situace."
         )
 
         if st.button(
@@ -2957,7 +2981,7 @@ with ai_tab:
 
             try:
                 with st.spinner(
-                    "Gemini is analyzing the planning situation..."
+                    "Gemini analyzuje situaci při plánování..."
                 ):
 
                     planning_report = generate_ai_planning_assistant(
@@ -2992,17 +3016,17 @@ with ai_tab:
         ):
 
             if planning_result.get("error"):
-                st.error("AI Planning Assistant failed.")
+                st.error("AI asistent plánování selhal.")
                 st.code(planning_result["error"])
 
             elif planning_result.get("report"):
-                st.markdown("### AI Planning Recommendations")
+                st.markdown("### Doporučení AI pro plánování")
                 st.markdown(planning_result["report"])
 
     else:
         st.info(
-            "AI Planning Assistant becomes available after an unsuccessful "
-            "scheduling attempt for the selected week."
+            "AI asistent plánování bude dostupný po neúspěšném "
+            "pokusu o vytvoření rozvrhu pro vybraný týden."
         )
 
     # --------------------------------------
@@ -3012,14 +3036,14 @@ with ai_tab:
     st.subheader("🤖 AI podpora rozhodování" if is_czech else "🤖 AI Decision Support")
 
     st.write(
-        "Compare recent successful schedule variants using transparent "
-        "operational metrics and receive an AI-supported recommendation."
+        "Porovnejte nedávné úspěšné varianty rozvrhu pomocí přehledných "
+        "provozních ukazatelů a získejte doporučení s podporou AI."
     )
 
     st.caption(
-        "Gemini receives aggregated metrics and anonymized assignment "
-        "difference counts only. Employee IDs are not sent to Gemini. "
-        "It does not modify, select, approve or publish any schedule."
+        "Gemini obdrží souhrnné ukazatele a anonymizované informace o přiřazení "
+        "pouze počty rozdílů. ID zaměstnanců se do Gemini neodesílají. "
+        "AI žádný rozvrh neupravuje, nevybírá, neschvaluje ani nezveřejňuje."
     )
 
     if st.button(
@@ -3048,8 +3072,8 @@ with ai_tab:
                     "metrics": [],
                     "report": None,
                     "error": (
-                        "No successful schedule variants were found "
-                        "for the selected week."
+                        "Pro vybraný týden nebyly nalezeny žádné úspěšné varianty rozvrhu "
+                        "pro vybraný týden."
                     )
                 }
             else:
@@ -3057,7 +3081,7 @@ with ai_tab:
                 assignments_by_run = {}
 
                 with st.spinner(
-                    "Calculating metrics and actual assignment differences..."
+                    "Počítají se ukazatele a skutečné rozdíly v přiřazení..."
                 ):
                     for run in recent_runs:
                         run_id = int(run["run_id"])
@@ -3104,7 +3128,7 @@ with ai_tab:
                         )
 
                 with st.spinner(
-                    "Gemini is comparing schedule metrics and "
+                    "Gemini porovnává ukazatele rozvrhů a "
                     "anonymized assignment differences..."
                 ):
                     decision_report = generate_ai_decision_support(
@@ -3136,14 +3160,14 @@ with ai_tab:
         and decision_result.get("week") == selected_week.isoformat()
     ):
         if decision_result.get("error"):
-            st.error("AI Decision Support could not complete the comparison.")
+            st.error("AI podpora rozhodování nedokázala dokončit porovnání.")
             st.error(decision_result["error"])
 
         else:
             decision_metrics = decision_result.get("metrics", [])
 
             if decision_metrics:
-                st.markdown("### Schedule Variant Metrics")
+                st.markdown("### Ukazatele variant rozvrhu")
 
                 summary_rows = []
                 for item in decision_metrics:
@@ -3161,7 +3185,7 @@ with ai_tab:
                         ),
                         "Coverage (%)": item["coverage_percent"],
                         "Preference match (%)": preference["match_percent"],
-                        "Contract days compliant": (
+                        "Soulad s počtem pracovních dnů podle smlouvy": (
                             f'{contracts["employees_meeting_exact_workdays"]}/'
                             f'{contracts["employees_checked"]}'
                         ),
@@ -3169,14 +3193,14 @@ with ai_tab:
                             f'{days_off["employees_respecting_requested_days_off"]}/'
                             f'{days_off["employees_checked"]}'
                         ),
-                        "Net hours": item["total_net_hours"],
+                        "Čistý počet hodin": item["total_net_hours"],
                         "Long consent violations": (
                             checks["long_without_explicit_consent"]
                         ),
                         "Multiple Long violations": (
                             checks["employees_with_more_than_one_long_shift"]
                         ),
-                        "Duplicate employee/day": (
+                        "Duplicitní směna zaměstnance v jednom dni": (
                             checks["duplicate_employee_day_assignments"]
                         )
                     })
@@ -3193,35 +3217,35 @@ with ai_tab:
                 if assignment_comparisons:
                     st.markdown("### Actual Assignment Differences")
                     st.caption(
-                        "Pairwise comparison of saved assignments by date, "
-                        "branch, shift and employee. Employee identifiers "
-                        "are not displayed or sent to Gemini."
+                        "Párové porovnání uložených přiřazení podle data, "
+                        "pobočky, směny a zaměstnance. Identifikátory zaměstnanců "
+                        "se nezobrazují ani se neodesílají do Gemini."
                     )
 
                     assignment_rows = []
                     for comparison in assignment_comparisons:
                         assignment_rows.append({
-                            "Compared runs": comparison["comparison"],
+                            "Porovnávané běhy": comparison["comparison"],
                             "Assignments (A / B)": (
                                 f'{comparison["total_assignments_run_a"]} / '
                                 f'{comparison["total_assignments_run_b"]}'
                             ),
-                            "Shift slots with different employees": (
+                            "Směnová místa s odlišnými zaměstnanci": (
                                 comparison[
                                     "slots_with_different_employee_assignments"
                                 ]
                             ),
-                            "Changed employee-to-slot entries": (
+                            "Změněná přiřazení zaměstnanců na směnová místa": (
                                 comparison[
                                     "employee_to_slot_entries_changed"
                                 ]
                             ),
-                            "Employees with changed weekly schedules": (
+                            "Zaměstnanci se změněným týdenním rozvrhem": (
                                 comparison[
                                     "employees_with_changed_weekly_schedules"
                                 ]
                             ),
-                            "Date/branch/shift groups with different staffing": (
+                            "Kombinace data, pobočky a směny s odlišným obsazením": (
                                 comparison[
                                     "date_branch_shift_buckets_with_different_staffing"
                                 ]
@@ -3241,7 +3265,7 @@ with ai_tab:
                     )
                 elif len(decision_metrics) == 1:
                     st.info(
-                        "Only one successful variant is available. "
+                        "Je k dispozici pouze jedna úspěšná varianta. "
                         "Actual assignment differences require at least "
                         "two variants."
                     )
@@ -3253,9 +3277,9 @@ with ai_tab:
                         detail_rows = []
                         for shift in SHIFT_ORDER:
                             detail_rows.append({
-                                "Shift": shift,
+                                "Směna": shift,
                                 "Assignments": item["shift_counts"][shift],
-                                "Net hours": item["net_hours_by_shift"][shift]
+                                "Čistý počet hodin": item["net_hours_by_shift"][shift]
                             })
                         st.dataframe(
                             pd.DataFrame(detail_rows),
@@ -3264,18 +3288,18 @@ with ai_tab:
                         )
 
                 if decision_result.get("report"):
-                    st.markdown("### AI Manager Recommendation")
+                    st.markdown("### Doporučení AI pro manažera")
                     st.markdown(decision_result["report"])
 
                 if len(decision_metrics) == 1:
                     st.info(
-                        "Only one successful variant is available. "
-                        "The report evaluates it, but cannot make a "
-                        "meaningful comparison between alternatives."
+                        "Je k dispozici pouze jedna úspěšná varianta. "
+                        "Zpráva ji vyhodnotí, ale nelze provést "
+                        "smysluplné porovnání různých možností."
                     )
             else:
                 st.info(
-                    "No schedule metrics are available for comparison."
+                    "Nejsou k dispozici žádné ukazatele rozvrhů k porovnání."
                 )
 
 # ==========================================
@@ -3284,5 +3308,5 @@ with ai_tab:
 st.divider()
 
 st.caption(
-    "AI Shift Planner | Manager Dashboard"
+    "Plánovač směn s AI | Manažerský přehled"
 )
