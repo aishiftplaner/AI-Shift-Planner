@@ -716,7 +716,7 @@ def calculate_decision_metrics(
     )
 
     return {
-        "variant": f"Run {int(run_id)}",
+        "variant": f"Běh {int(run_id)}",
         "run_id": int(run_id),
         "assigned_positions": assigned_positions,
         "expected_positions": expected_positions,
@@ -859,7 +859,7 @@ def compare_schedule_assignments(run_a_id, assignments_a, run_b_id, assignments_
     )
 
     return {
-        "comparison": f"Run {int(run_a_id)} vs Run {int(run_b_id)}",
+        "comparison": f"Běh {int(run_a_id)} vs. běh {int(run_b_id)}",
         "run_a_id": int(run_a_id),
         "run_b_id": int(run_b_id),
         "total_assignments_run_a": int(len(a)),
@@ -892,59 +892,60 @@ def generate_ai_decision_support(metrics, selected_week, assignment_comparisons=
         "week_start_date": selected_week.isoformat(),
         "number_of_variants": len(metrics),
         "comparison_scope_note": (
-            "Decision Support does not independently recalculate daily or "
-            "weekly rest. Those checks belong to the scheduling algorithm "
-            "and its post-solve validation."
+            "Modul podpory rozhodování samostatně nepřepočítává denní ani "
+            "týdenní odpočinek. Tyto kontroly provádí plánovací algoritmus "
+            "a následná validace po výpočtu."
         ),
         "variants": metrics,
         "actual_assignment_comparisons": assignment_comparisons or []
     }
 
     prompt = f"""
-You are the AI Decision Support module of an employee shift-planning system.
+Jsi modul podpory rozhodování s umělou inteligencí v systému plánování směn.
 
-Compare the saved feasible schedule variants using the aggregated metrics
-and anonymized actual-assignment comparison results supplied below.
+Porovnej uložené proveditelné varianty rozvrhu podle souhrnných ukazatelů
+ a anonymizovaných výsledků porovnání skutečného přiřazení směn uvedených níže.
 
-SCHEDULE COMPARISON DATA:
+DATA PRO POROVNÁNÍ ROZVRHŮ:
 {json.dumps(safe_payload, ensure_ascii=False, indent=2)}
 
-YOUR TASKS:
-1. Compare the variants using the same metrics and explain meaningful
-   differences.
-2. Review staffing coverage, net working hours, shift distribution,
-   contract workday compliance and requested days-off compliance.
-3. Review preference-match percentages, noting the eligible assignment
-   count used as the denominator.
-4. Highlight any reported Long Shift consent, repeated Long Shift or
-   duplicate employee/day violations.
-5. Identify the strongest and weakest aspects of each variant.
-6. Recommend which variant appears strongest overall based on the
-   supplied evidence, while explaining the trade-offs.
-7. If the metrics are tied or incomplete, say so and avoid a forced ranking.
-8. Review actual assignment differences between each pair of runs:
-   changed shift slots, changed employee-to-slot entries, employees whose
-   weekly assignment pattern changed, staffing-count differences by date,
-   branch and shift, and slot groups present in only one run.
-9. End with a short section titled "Next Manager Decision".
+ÚKOLY:
+1. Porovnej varianty pomocí stejných ukazatelů a vysvětli podstatné rozdíly.
+2. Zhodnoť pokrytí směn, čistý počet pracovních hodin, rozdělení směn,
+   dodržení smluvního počtu pracovních dnů a požadovaných dnů volna.
+3. Zhodnoť procento splnění preferencí a uveď počet způsobilých přiřazení,
+   který byl použit jako základ výpočtu.
+4. Upozorni na zaznamenané směny Long bez souhlasu, opakované směny Long
+   nebo duplicitní přiřazení zaměstnance v jednom dni.
+5. Urči nejsilnější a nejslabší stránky každé varianty.
+6. Na základě dodaných údajů doporuč, která varianta se jeví jako nejlepší,
+   a vysvětli související kompromisy.
+7. Pokud jsou ukazatele shodné nebo neúplné, otevřeně to uveď a nevytvářej
+   umělé pořadí variant.
+8. Zhodnoť skutečné rozdíly v přiřazení mezi každou dvojicí běhů:
+   změněná směnová místa, změněná přiřazení zaměstnanců ke směnám,
+   zaměstnance se změněným týdenním rozvrhem, rozdíly v počtu pracovníků
+   podle data, pobočky a směny a skupiny směn přítomné pouze v jedné variantě.
+9. Zakonči zprávu krátkou částí s názvem „Další rozhodnutí manažera“.
 
-IMPORTANT RULES:
-- Use only the supplied metrics. Do not invent facts or causes.
-- A run marked Feasible is not automatically proof of every possible
-  legal or operational requirement.
-- Do not claim that a metric was checked if it is absent.
-- Do not infer employee identities or discuss individual employees.
-- Actual assignment comparison values are aggregate counts only. Explain
-  what they measure; do not invent which employees changed or why.
-- Do not recommend violating contracts, requested days off, consent,
-  daily rest or weekly rest.
-- Do not change, generate, approve or publish a schedule.
-- Do not claim that Gemini is the mathematical optimizer.
-- The manager makes the final decision.
-- Clearly distinguish measured results from recommendations.
-- Write in clear, professional English with headings and concise bullets.
+DŮLEŽITÁ PRAVIDLA:
+- Používej pouze dodané ukazatele. Nevymýšlej si fakta ani příčiny.
+- Označení běhu jako proveditelného samo o sobě nedokazuje splnění všech
+  možných právních nebo provozních požadavků.
+- Netvrď, že byla kontrolována metrika, která v datech chybí.
+- Neodvozuj totožnost zaměstnanců ani nepopisuj jednotlivé zaměstnance.
+- Údaje o rozdílech v přiřazení jsou pouze souhrnné počty. Vysvětli,
+  co měří, ale nevymýšlej, kteří zaměstnanci se změnili ani proč.
+- Nedoporučuj porušení smluv, požadovaných dnů volna, souhlasu,
+  denního odpočinku ani týdenního odpočinku.
+- Neměň, nevytvářej, neschvaluj ani nezveřejňuj žádný rozvrh.
+- Netvrď, že Gemini je matematický optimalizátor.
+- Konečné rozhodnutí vždy provádí manažer.
+- Jasně odděluj naměřené výsledky od doporučení.
+- Celý výstup napiš výhradně česky, spisovným a profesionálním jazykem.
+  Používej české nadpisy a stručné odrážky. Nepoužívej angličtinu.
 
-Return only the manager-facing comparison report.
+Vrať pouze srovnávací zprávu pro manažera v češtině.
 """
 
     response = client.models.generate_content(
@@ -953,7 +954,7 @@ Return only the manager-facing comparison report.
     )
 
     if not response.text:
-        raise RuntimeError("Gemini returned an empty decision-support report.")
+        raise RuntimeError("Gemini nevrátil žádnou zprávu podpory rozhodování.")
 
     return response.text
 
@@ -3033,7 +3034,7 @@ with ai_tab:
     # AI DECISION SUPPORT
     # --------------------------------------
     st.divider()
-    st.subheader("🤖 AI podpora rozhodování" if is_czech else "🤖 AI Decision Support")
+    st.subheader("🤖 AI podpora rozhodování")
 
     st.write(
         "Porovnejte nedávné úspěšné varianty rozvrhu pomocí přehledných "
@@ -3047,7 +3048,7 @@ with ai_tab:
     )
 
     if st.button(
-        "Spustit AI podporu rozhodování" if is_czech else "Run AI Decision Support",
+        "Spustit AI podporu rozhodování",
         type="primary",
         key="run_ai_decision_support"
     ):
@@ -3081,7 +3082,7 @@ with ai_tab:
                 assignments_by_run = {}
 
                 with st.spinner(
-                    "Počítají se ukazatele a skutečné rozdíly v přiřazení..."
+                    "Počítají se ukazatele a skutečné rozdíly v přiřazení směn..."
                 ):
                     for run in recent_runs:
                         run_id = int(run["run_id"])
@@ -3108,7 +3109,7 @@ with ai_tab:
 
                         metrics["manager_approval_status"] = (
                             run.get("manager_approval_status")
-                            or "Not recorded"
+                            or "Nezaznamenáno"
                         )
                         comparison_metrics.append(metrics)
 
@@ -3129,7 +3130,7 @@ with ai_tab:
 
                 with st.spinner(
                     "Gemini porovnává ukazatele rozvrhů a "
-                    "anonymized assignment differences..."
+                    "anonymizovaných rozdílů v přiřazení..."
                 ):
                     decision_report = generate_ai_decision_support(
                         comparison_metrics,
@@ -3177,27 +3178,32 @@ with ai_tab:
                     checks = item["constraint_checks"]
 
                     summary_rows.append({
-                        "Variant": item["variant"],
-                        "Approval": item["manager_approval_status"],
-                        "Positions": (
+                        "Varianta": item["variant"],
+                        "Schválení manažerem": {
+                            "Approved": "Schváleno",
+                            "Rejected": "Zamítnuto",
+                            "Not_Reviewed": "Nezkontrolováno",
+                            "Not recorded": "Nezaznamenáno"
+                        }.get(item["manager_approval_status"], item["manager_approval_status"]),
+                        "Obsazená místa": (
                             f'{item["assigned_positions"]}/'
                             f'{item["expected_positions"]}'
                         ),
-                        "Coverage (%)": item["coverage_percent"],
-                        "Preference match (%)": preference["match_percent"],
+                        "Pokrytí směn (%)": item["coverage_percent"],
+                        "Splnění preferencí (%)": preference["match_percent"],
                         "Soulad s počtem pracovních dnů podle smlouvy": (
                             f'{contracts["employees_meeting_exact_workdays"]}/'
                             f'{contracts["employees_checked"]}'
                         ),
-                        "Requested days off respected": (
+                        "Dodržení požadovaných dnů volna": (
                             f'{days_off["employees_respecting_requested_days_off"]}/'
                             f'{days_off["employees_checked"]}'
                         ),
                         "Čistý počet hodin": item["total_net_hours"],
-                        "Long consent violations": (
+                        "Směny Long bez souhlasu": (
                             checks["long_without_explicit_consent"]
                         ),
-                        "Multiple Long violations": (
+                        "Zaměstnanci s více směnami Long": (
                             checks["employees_with_more_than_one_long_shift"]
                         ),
                         "Duplicitní směna zaměstnance v jednom dni": (
@@ -3215,7 +3221,7 @@ with ai_tab:
                     "assignment_comparisons", []
                 )
                 if assignment_comparisons:
-                    st.markdown("### Actual Assignment Differences")
+                    st.markdown("### Rozdíly ve skutečném přiřazení směn")
                     st.caption(
                         "Párové porovnání uložených přiřazení podle data, "
                         "pobočky, směny a zaměstnance. Identifikátory zaměstnanců "
@@ -3226,7 +3232,7 @@ with ai_tab:
                     for comparison in assignment_comparisons:
                         assignment_rows.append({
                             "Porovnávané běhy": comparison["comparison"],
-                            "Assignments (A / B)": (
+                            "Počet přiřazení (A / B)": (
                                 f'{comparison["total_assignments_run_a"]} / '
                                 f'{comparison["total_assignments_run_b"]}'
                             ),
@@ -3250,10 +3256,10 @@ with ai_tab:
                                     "date_branch_shift_buckets_with_different_staffing"
                                 ]
                             ),
-                            "Slot groups only in A": (
+                            "Skupiny směn pouze ve variantě A": (
                                 comparison["slot_groups_only_in_run_a"]
                             ),
-                            "Slot groups only in B": (
+                            "Skupiny směn pouze ve variantě B": (
                                 comparison["slot_groups_only_in_run_b"]
                             )
                         })
@@ -3266,19 +3272,19 @@ with ai_tab:
                 elif len(decision_metrics) == 1:
                     st.info(
                         "Je k dispozici pouze jedna úspěšná varianta. "
-                        "Actual assignment differences require at least "
-                        "two variants."
+                        "Porovnání skutečného přiřazení směn vyžaduje alespoň "
+                        "dvě varianty."
                     )
 
                 for item in decision_metrics:
                     with st.expander(
-                        f'{item["variant"]} — shift distribution and hours'
+                        f'{item["variant"]} — rozdělení směn a počet hodin'
                     ):
                         detail_rows = []
                         for shift in SHIFT_ORDER:
                             detail_rows.append({
                                 "Směna": shift,
-                                "Assignments": item["shift_counts"][shift],
+                                "Počet směn": item["shift_counts"][shift],
                                 "Čistý počet hodin": item["net_hours_by_shift"][shift]
                             })
                         st.dataframe(
