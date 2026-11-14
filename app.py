@@ -953,8 +953,8 @@ def validate_week_data(active_employees, week_preferences):
     issues = []
 
     weekdays = [
-        "Monday", "Tuesday", "Wednesday", "Thursday",
-        "Friday", "Saturday", "Sunday"
+        ("Pondělí" if cz else "Monday"), ("Úterý" if cz else "Tuesday"), ("Středa" if cz else "Wednesday"), ("Čtvrtek" if cz else "Thursday"),
+        ("Pátek" if cz else "Friday"), ("Sobota" if cz else "Saturday"), ("Neděle" if cz else "Sunday")
     ]
 
     valid_shifts = ["Morning", "Evening", "Flexible"]
@@ -1094,9 +1094,32 @@ def validate_week_data(active_employees, week_preferences):
 # 5. EMPLOYEE AVAILABILITY FORM
 # ==========================================
 def employee_form():
-    st.title("📅 Employee Availability Form")
+    st.markdown(
+        """
+        <style>
+        .stApp { background-color: #F7F9FC; }
+        [data-testid="stHeader"] { background: rgba(247,249,252,0.92); }
+        div[data-testid="stForm"], div[data-testid="stExpander"] {
+            background: #FFFFFF;
+            border: 1px solid #E5EAF1;
+            border-radius: 12px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    form_language = st.sidebar.selectbox(
+        "Language / Jazyk",
+        ["English", "Čeština"],
+        key="employee_form_language"
+    )
+    cz = form_language == "Čeština"
+
+    st.title("📅 Formulář dostupnosti zaměstnance" if cz else "📅 Employee Availability Form")
 
     st.write(
+        "Vyplňte prosím svou dostupnost pro nadcházející pracovní týden."
+        if cz else
         "Please submit your availability for the upcoming working week."
     )
 
@@ -1104,7 +1127,7 @@ def employee_form():
         employees = load_table("employees")
 
         if employees.empty:
-            st.warning("No employees found.")
+            st.warning("Nebyli nalezeni žádní zaměstnanci." if cz else "No employees found.")
             return
 
         active = employees[
@@ -1112,13 +1135,13 @@ def employee_form():
         ].copy()
 
         if active.empty:
-            st.warning("No active employees found.")
+            st.warning("Nebyli nalezeni žádní aktivní zaměstnanci." if cz else "No active employees found.")
             return
 
         active = active.sort_values("employee_id")
 
         employee_id = st.selectbox(
-            "Your Employee ID",
+            ("Vaše ID zaměstnance" if cz else "Your Employee ID"),
             active["employee_id"].tolist()
         )
 
@@ -1130,14 +1153,19 @@ def employee_form():
         work_days = int(employee["work_days_per_week"])
 
         st.info(
-            f"Your contract: {work_days} working days "
-            f"and {days_off_count} days off per week."
+            (
+                f"Vaše smlouva: {work_days} pracovních dnů "
+                f"a {days_off_count} dnů volna týdně."
+            ) if cz else (
+                f"Your contract: {work_days} working days "
+                f"and {days_off_count} days off per week."
+            )
         )
 
         st.divider()
 
         week_start = st.date_input(
-            "Week starting on (Monday)",
+            ("Týden začínající v pondělí" if cz else "Week starting on (Monday)"),
             value=get_monday()
         )
 
@@ -1145,36 +1173,51 @@ def employee_form():
             "Monday", "Tuesday", "Wednesday", "Thursday",
             "Friday", "Saturday", "Sunday"
         ]
+        weekday_labels = {
+            "Monday": "Pondělí", "Tuesday": "Úterý",
+            "Wednesday": "Středa", "Thursday": "Čtvrtek",
+            "Friday": "Pátek", "Saturday": "Sobota",
+            "Sunday": "Neděle"
+        }
 
         required_days = st.multiselect(
-            f"Choose exactly {days_off_count} days off",
-            weekdays
+            (f"Vyberte přesně {days_off_count} dnů volna" if cz else f"Choose exactly {days_off_count} days off"),
+            weekdays,
+            format_func=lambda day: weekday_labels[day] if cz else day
         )
 
         st.caption(
-            f"Selected: {len(required_days)} of {days_off_count} days."
+            (f"Vybráno: {len(required_days)} z {days_off_count} dnů." if cz else f"Selected: {len(required_days)} of {days_off_count} days.")
         )
 
         preferred_shift = st.selectbox(
-            "Preferred shift",
-            ["Morning", "Evening", "Flexible"]
+            ("Preferovaná směna" if cz else "Preferred shift"),
+            ["Morning", "Evening", "Flexible"],
+            format_func=lambda value: (
+                {"Morning": "Ranní", "Evening": "Večerní", "Flexible": "Flexibilní"}[value]
+                if cz else value
+            )
         )
 
         consent = st.selectbox(
-            "Are you willing to work a Long Shift (09:00–21:00)?",
-            ["Unknown", "Yes", "No"]
+            ("Souhlasíte s dlouhou směnou (09:00–21:00)?" if cz else "Are you willing to work a Long Shift (09:00–21:00)?"),
+            ["Unknown", "Yes", "No"],
+            format_func=lambda value: (
+                {"Unknown": "Nevyplněno", "Yes": "Ano", "No": "Ne"}[value]
+                if cz else value
+            )
         )
 
-        comment = st.text_area("Additional comment (optional)")
+        comment = st.text_area("Další komentář (nepovinné)" if cz else "Additional comment (optional)")
 
-        if st.button("Submit availability", type="primary"):
+        if st.button("Odeslat dostupnost" if cz else "Submit availability", type="primary"):
 
             if week_start.weekday() != 0:
-                st.error("The selected week must start on Monday.")
+                st.error("Vybraný týden musí začínat v pondělí." if cz else "The selected week must start on Monday.")
 
             elif len(required_days) != days_off_count:
                 st.error(
-                    f"Please select exactly {days_off_count} days off."
+                    (f"Vyberte přesně {days_off_count} dnů volna." if cz else f"Please select exactly {days_off_count} days off.")
                 )
 
             else:
@@ -1196,15 +1239,15 @@ def employee_form():
                     ).execute()
 
                     st.success(
-                        "Your availability was submitted successfully!"
+                        "Vaše dostupnost byla úspěšně odeslána!" if cz else "Your availability was submitted successfully!"
                     )
 
                 except Exception as e:
-                    st.error("Could not save your submission.")
+                    st.error("Odeslání se nepodařilo uložit." if cz else "Could not save your submission.")
                     st.exception(e)
 
     except Exception as e:
-        st.error("Could not load employee data.")
+        st.error("Nepodařilo se načíst údaje zaměstnance." if cz else "Could not load employee data.")
         st.exception(e)
 
 
@@ -1350,7 +1393,7 @@ def build_solver_constraints(
     # Exact mandatory days off.
     weekdays = [
         "Monday", "Tuesday", "Wednesday",
-        "Thursday", "Friday", "Saturday", "Sunday"
+        "Thursday", ("Pátek" if cz else "Friday"), ("Sobota" if cz else "Saturday"), ("Neděle" if cz else "Sunday")
     ]
 
     for e, (_, emp) in enumerate(employees.iterrows()):
@@ -1944,7 +1987,6 @@ def approve_or_reject_run(run_id, decision, comment):
         "manager_approval_status": decision
     }).eq("run_id", int(run_id)).execute()
 
-
 # ==========================================
 # 8. PAGE ROUTING
 # ==========================================
@@ -1961,6 +2003,44 @@ if page == "employee":
 st.title("📅 AI Shift Planner")
 st.subheader("Manager Dashboard")
 
+st.markdown(
+    '''
+    <style>
+    .stApp { background-color: #F7F9FC; }
+    [data-testid="stHeader"] { background: rgba(247,249,252,0.92); }
+    [data-testid="stMetric"] {
+        background: #FFFFFF;
+        border: 1px solid #E5EAF1;
+        padding: 16px;
+        border-radius: 12px;
+    }
+    div[data-testid="stTabs"] button {
+        font-weight: 600;
+        padding-top: 12px;
+        padding-bottom: 12px;
+    }
+    div[data-testid="stExpander"] {
+        border: 1px solid #E5EAF1;
+        border-radius: 12px;
+        background: #FFFFFF;
+    }
+    </style>
+    ''',
+    unsafe_allow_html=True
+)
+
+language = st.sidebar.selectbox(
+    "Language / Jazyk",
+    ["English", "Čeština"],
+    key="app_language"
+)
+is_czech = language == "Čeština"
+
+tab_labels = (
+    ["Přehled", "Zaměstnanci a dostupnost", "Správa směn", "AI přehledy a reporty"]
+    if is_czech
+    else ["Dashboard", "Employees & Availability", "Schedule Management", "AI Insights & Reports"]
+)
 
 # ==========================================
 # 9.1. GEMINI API CONNECTION TEST
@@ -1986,7 +2066,6 @@ with st.expander("Gemini AI Connection Test"):
             st.error("Gemini API connection failed.")
             st.error(str(e))
 
-
 # ==========================================
 # 9.2. LOAD DATABASE TABLES
 # ==========================================
@@ -2006,7 +2085,7 @@ st.divider()
 st.header("Weekly Schedule Management")
 
 selected_week = st.date_input(
-    "Select week (Monday)",
+    "Vyberte týden (pondělí)" if is_czech else "Select week (Monday)",
     value=get_monday(),
     key="manager_week"
 )
@@ -2110,39 +2189,62 @@ received_count = int(
 
 missing_count = total_employees - received_count
 
+dashboard_tab, employees_tab, schedule_tab, ai_tab = st.tabs(tab_labels)
 
-# ==========================================
-# 9.4. WEEKLY SUBMISSION OVERVIEW
-# ==========================================
-st.divider()
-st.header("Weekly Submission Overview")
+with dashboard_tab:
+    st.subheader("Přehled" if is_czech else "Weekly Overview")
+    st.write(
+        (f"Týden začínající: {selected_week}" if is_czech
+         else f"Week starting: {selected_week}")
+    )
 
-c1, c2, c3 = st.columns(3)
+    st.divider()
+    st.header("Přehled odevzdání za týden" if is_czech else "Weekly Submission Overview")
 
-c1.metric("Active Employees", total_employees)
-c2.metric("Received Submissions", received_count)
-c3.metric("Missing Submissions", missing_count)
+    c1, c2, c3 = st.columns(3)
 
+    c1.metric("Aktivní zaměstnanci" if is_czech else "Active Employees", total_employees)
+    c2.metric("Odevzdáno" if is_czech else "Received Submissions", received_count)
+    c3.metric("Chybějící odevzdání" if is_czech else "Missing Submissions", missing_count)
 
-# ==========================================
-# 9.5. DASHBOARD TABS
-# ==========================================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "Employees",
-    "Branches",
-    "Shift Requirements",
-    "Company Rules",
-    "Weekly Preferences",
-    "Validation Engine",
-    "Scheduling"
-])
+    with st.expander(
+        "Nastavení provozu" if is_czech else "Operational Settings",
+        expanded=False
+    ):
+        st.caption(
+            "Pobočky, požadavky na směny a firemní pravidla."
+            if is_czech else
+            "Branches, shift staffing requirements and company rules."
+        )
 
+        st.subheader("Pobočky" if is_czech else "Branches")
 
-# ==========================================
-# TAB 1. EMPLOYEES
-# ==========================================
-with tab1:
-    st.subheader("Employees")
+        st.dataframe(
+            branches,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader("Požadavky na směny" if is_czech else "Shift Requirements")
+
+        st.dataframe(
+            shift_requirements,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader("Firemní pravidla" if is_czech else "Company Rules")
+
+        st.dataframe(
+            company_rules,
+            use_container_width=True,
+            hide_index=True
+        )
+
+with employees_tab:
+    st.subheader("Zaměstnanci a dostupnost" if is_czech else "Employees & Availability")
+
+    st.subheader("Zaměstnanci" if is_czech else "Employees")
 
     st.dataframe(
         employees,
@@ -2150,51 +2252,7 @@ with tab1:
         hide_index=True
     )
 
-
-# ==========================================
-# TAB 2. BRANCHES
-# ==========================================
-with tab2:
-    st.subheader("Branches")
-
-    st.dataframe(
-        branches,
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-# ==========================================
-# TAB 3. SHIFT REQUIREMENTS
-# ==========================================
-with tab3:
-    st.subheader("Shift Requirements")
-
-    st.dataframe(
-        shift_requirements,
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-# ==========================================
-# TAB 4. COMPANY RULES
-# ==========================================
-with tab4:
-    st.subheader("Company Rules")
-
-    st.dataframe(
-        company_rules,
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-# ==========================================
-# TAB 5. WEEKLY PREFERENCES
-# ==========================================
-with tab5:
-    st.subheader("Weekly Employee Preferences")
+    st.subheader("Týdenní preference zaměstnanců" if is_czech else "Weekly Employee Preferences")
 
     st.write(f"Week starting: {selected_week}")
 
@@ -2217,7 +2275,7 @@ with tab5:
 
     st.divider()
 
-    st.subheader("Employees with Missing Submissions")
+    st.subheader("Zaměstnanci bez odevzdání" if is_czech else "Employees with Missing Submissions")
 
     missing_employees = weekly_view[
         weekly_view["submission_status"] == "Missing"
@@ -2241,11 +2299,9 @@ with tab5:
             hide_index=True
         )
 
+with schedule_tab:
+    st.subheader("Správa směn" if is_czech else "Schedule Management")
 
-# ==========================================
-# TAB 6. VALIDATION ENGINE
-# ==========================================
-with tab6:
     st.subheader("Weekly Data Validation")
 
     st.write(
@@ -2365,73 +2421,6 @@ with tab6:
         else:
             st.success("No validation issues found.")
 
-        # ----------------------------------
-        # AI CONFLICT ANALYSIS
-        # ----------------------------------
-        st.divider()
-        st.subheader("🤖 AI Conflict Analysis")
-
-        st.write(
-            "Gemini analyzes validation findings, explains their impact "
-            "and suggests actions for the manager."
-        )
-
-        st.caption(
-            "Only anonymized validation information is sent to Gemini. "
-            "The AI does not modify the schedule or database."
-        )
-
-        if st.button(
-            "Run AI Conflict Analysis",
-            type="primary",
-            key="run_ai_conflict_analysis"
-        ):
-
-            try:
-                with st.spinner(
-                    "Gemini is analyzing the validation results..."
-                ):
-
-                    ai_report = generate_ai_conflict_analysis(
-                        issues,
-                        selected_week
-                    )
-
-                st.session_state["ai_conflict_analysis"] = {
-                    "week": selected_week.isoformat(),
-                    "report": ai_report,
-                    "error": None
-                }
-
-            except Exception as e:
-                st.session_state["ai_conflict_analysis"] = {
-                    "week": selected_week.isoformat(),
-                    "report": None,
-                    "error": str(e)
-                }
-
-        ai_result = st.session_state.get(
-            "ai_conflict_analysis"
-        )
-
-        if (
-            ai_result
-            and ai_result.get("week") == selected_week.isoformat()
-        ):
-
-            if ai_result.get("error"):
-                st.error("AI Conflict Analysis failed.")
-                st.code(ai_result["error"])
-
-            elif ai_result.get("report"):
-                st.markdown("### AI Manager Report")
-                st.markdown(ai_result["report"])
-
-
-# ==========================================
-# TAB 7. SCHEDULING
-# ==========================================
-with tab7:
     st.subheader("Scheduling Algorithm")
 
     st.write(
@@ -2589,9 +2578,245 @@ with tab7:
         )
 
     # --------------------------------------
-    # AI PLANNING ASSISTANT
+    # Load run history for selected week
     # --------------------------------------
+    try:
+        runs_response = (
+            supabase.table("schedule_runs")
+            .select("*")
+            .eq("week_start_date", selected_week.isoformat())
+            .order("run_id", desc=True)
+            .execute()
+        )
+
+        runs = pd.DataFrame(
+            runs_response.data or []
+        )
+
+    except Exception as e:
+        runs = pd.DataFrame()
+
+        st.error(
+            "Could not load schedule run history."
+        )
+
+        st.exception(e)
+
+    if not runs.empty:
+
+        st.divider()
+        st.subheader("Schedule Run History")
+
+        st.dataframe(
+            runs,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        feasible_runs = runs[
+            runs["run_status"] == "Feasible"
+        ]
+
+        if not feasible_runs.empty:
+
+            selected_run_id = st.selectbox(
+                "View generated schedule (Run ID)",
+                feasible_runs["run_id"].astype(int).tolist(),
+                key="view_schedule_run"
+            )
+
+            try:
+                assignment_response = (
+                    supabase.table("schedule_assignments")
+                    .select("*")
+                    .eq("run_id", int(selected_run_id))
+                    .order("work_date")
+                    .execute()
+                )
+
+                schedule_df = pd.DataFrame(
+                    assignment_response.data or []
+                )
+
+                if not schedule_df.empty:
+
+                    display_df = schedule_df.copy()
+
+                    display_df["work_date"] = pd.to_datetime(
+                        display_df["work_date"]
+                    ).dt.date
+
+                    st.subheader("Generated Weekly Schedule")
+
+                    st.dataframe(
+                        display_df[
+                            [
+                                "work_date",
+                                "branch_id",
+                                "employee_id",
+                                "shift_type",
+                                "start_time",
+                                "end_time",
+                                "break_minutes"
+                            ]
+                        ],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    selected_run = feasible_runs[
+                        feasible_runs["run_id"].astype(int)
+                        == int(selected_run_id)
+                    ].iloc[0]
+
+                    if (
+                        selected_run["manager_approval_status"]
+                        == "Not_Reviewed"
+                    ):
+
+                        st.divider()
+                        st.subheader("Manager Approval")
+
+                        manager_comment = st.text_area(
+                            "Manager comment (optional)",
+                            key=f"approval_comment_{selected_run_id}"
+                        )
+
+                        approve_col, reject_col = st.columns(2)
+
+                        with approve_col:
+
+                            if st.button(
+                                "Approve Schedule",
+                                type="primary",
+                                key=f"approve_{selected_run_id}"
+                            ):
+
+                                try:
+                                    approve_or_reject_run(
+                                        selected_run_id,
+                                        "Approved",
+                                        manager_comment
+                                    )
+
+                                    st.success(
+                                        "Schedule approved. "
+                                        "The decision was saved."
+                                    )
+
+                                    st.rerun()
+
+                                except Exception as e:
+                                    st.error(
+                                        "Could not save manager approval."
+                                    )
+                                    st.exception(e)
+
+                        with reject_col:
+
+                            if st.button(
+                                "Reject Schedule",
+                                key=f"reject_{selected_run_id}"
+                            ):
+
+                                try:
+                                    approve_or_reject_run(
+                                        selected_run_id,
+                                        "Rejected",
+                                        manager_comment
+                                    )
+
+                                    st.warning(
+                                        "Schedule rejected. "
+                                        "The decision was saved."
+                                    )
+
+                                    st.rerun()
+
+                                except Exception as e:
+                                    st.error(
+                                        "Could not save manager rejection."
+                                    )
+                                    st.exception(e)
+
+                    else:
+                        st.info(
+                            "Manager decision: "
+                            f"{selected_run['manager_approval_status']}"
+                        )
+
+            except Exception as e:
+                st.error(
+                    "Could not load the selected schedule."
+                )
+
+                st.exception(e)
+
+with ai_tab:
+    st.subheader("AI přehledy a reporty" if is_czech else "AI Insights & Reports")
+
+    # ----------------------------------
+    # AI CONFLICT ANALYSIS
+    # ----------------------------------
     st.divider()
+    st.subheader("🤖 AI Conflict Analysis")
+
+    st.write(
+        "Gemini analyzes validation findings, explains their impact "
+        "and suggests actions for the manager."
+    )
+
+    st.caption(
+        "Only anonymized validation information is sent to Gemini. "
+        "The AI does not modify the schedule or database."
+    )
+
+    if st.button(
+        "Run AI Conflict Analysis",
+        type="primary",
+        key="run_ai_conflict_analysis"
+    ):
+
+        try:
+            with st.spinner(
+                "Gemini is analyzing the validation results..."
+            ):
+
+                ai_report = generate_ai_conflict_analysis(
+                    issues,
+                    selected_week
+                )
+
+            st.session_state["ai_conflict_analysis"] = {
+                "week": selected_week.isoformat(),
+                "report": ai_report,
+                "error": None
+            }
+
+        except Exception as e:
+            st.session_state["ai_conflict_analysis"] = {
+                "week": selected_week.isoformat(),
+                "report": None,
+                "error": str(e)
+            }
+
+    ai_result = st.session_state.get(
+        "ai_conflict_analysis"
+    )
+
+    if (
+        ai_result
+        and ai_result.get("week") == selected_week.isoformat()
+    ):
+
+        if ai_result.get("error"):
+            st.error("AI Conflict Analysis failed.")
+            st.code(ai_result["error"])
+
+        elif ai_result.get("report"):
+            st.markdown("### AI Manager Report")
+            st.markdown(ai_result["report"])
+
     st.subheader("🤖 AI Planning Assistant")
 
     st.write(
@@ -2950,182 +3175,6 @@ with tab7:
                 st.info(
                     "No schedule metrics are available for comparison."
                 )
-
-    # --------------------------------------
-    # Load run history for selected week
-    # --------------------------------------
-    try:
-        runs_response = (
-            supabase.table("schedule_runs")
-            .select("*")
-            .eq("week_start_date", selected_week.isoformat())
-            .order("run_id", desc=True)
-            .execute()
-        )
-
-        runs = pd.DataFrame(
-            runs_response.data or []
-        )
-
-    except Exception as e:
-        runs = pd.DataFrame()
-
-        st.error(
-            "Could not load schedule run history."
-        )
-
-        st.exception(e)
-
-    if not runs.empty:
-
-        st.divider()
-        st.subheader("Schedule Run History")
-
-        st.dataframe(
-            runs,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        feasible_runs = runs[
-            runs["run_status"] == "Feasible"
-        ]
-
-        if not feasible_runs.empty:
-
-            selected_run_id = st.selectbox(
-                "View generated schedule (Run ID)",
-                feasible_runs["run_id"].astype(int).tolist(),
-                key="view_schedule_run"
-            )
-
-            try:
-                assignment_response = (
-                    supabase.table("schedule_assignments")
-                    .select("*")
-                    .eq("run_id", int(selected_run_id))
-                    .order("work_date")
-                    .execute()
-                )
-
-                schedule_df = pd.DataFrame(
-                    assignment_response.data or []
-                )
-
-                if not schedule_df.empty:
-
-                    display_df = schedule_df.copy()
-
-                    display_df["work_date"] = pd.to_datetime(
-                        display_df["work_date"]
-                    ).dt.date
-
-                    st.subheader("Generated Weekly Schedule")
-
-                    st.dataframe(
-                        display_df[
-                            [
-                                "work_date",
-                                "branch_id",
-                                "employee_id",
-                                "shift_type",
-                                "start_time",
-                                "end_time",
-                                "break_minutes"
-                            ]
-                        ],
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                    selected_run = feasible_runs[
-                        feasible_runs["run_id"].astype(int)
-                        == int(selected_run_id)
-                    ].iloc[0]
-
-                    if (
-                        selected_run["manager_approval_status"]
-                        == "Not_Reviewed"
-                    ):
-
-                        st.divider()
-                        st.subheader("Manager Approval")
-
-                        manager_comment = st.text_area(
-                            "Manager comment (optional)",
-                            key=f"approval_comment_{selected_run_id}"
-                        )
-
-                        approve_col, reject_col = st.columns(2)
-
-                        with approve_col:
-
-                            if st.button(
-                                "Approve Schedule",
-                                type="primary",
-                                key=f"approve_{selected_run_id}"
-                            ):
-
-                                try:
-                                    approve_or_reject_run(
-                                        selected_run_id,
-                                        "Approved",
-                                        manager_comment
-                                    )
-
-                                    st.success(
-                                        "Schedule approved. "
-                                        "The decision was saved."
-                                    )
-
-                                    st.rerun()
-
-                                except Exception as e:
-                                    st.error(
-                                        "Could not save manager approval."
-                                    )
-                                    st.exception(e)
-
-                        with reject_col:
-
-                            if st.button(
-                                "Reject Schedule",
-                                key=f"reject_{selected_run_id}"
-                            ):
-
-                                try:
-                                    approve_or_reject_run(
-                                        selected_run_id,
-                                        "Rejected",
-                                        manager_comment
-                                    )
-
-                                    st.warning(
-                                        "Schedule rejected. "
-                                        "The decision was saved."
-                                    )
-
-                                    st.rerun()
-
-                                except Exception as e:
-                                    st.error(
-                                        "Could not save manager rejection."
-                                    )
-                                    st.exception(e)
-
-                    else:
-                        st.info(
-                            "Manager decision: "
-                            f"{selected_run['manager_approval_status']}"
-                        )
-
-            except Exception as e:
-                st.error(
-                    "Could not load the selected schedule."
-                )
-
-                st.exception(e)
-
 
 # ==========================================
 # 10. FOOTER
